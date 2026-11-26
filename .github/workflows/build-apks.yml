@@ -44,7 +44,7 @@ jobs:
       - name: Build Web Assets into Android APK
         run: |
           if [ -f "package.json" ]; then
-            npm install
+            npm install --legacy-peer-deps
             npm run build
             rm -rf android/app/src/main/assets/www
             mkdir -p android/app/src/main/assets/www
