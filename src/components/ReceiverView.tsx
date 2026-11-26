@@ -1,7 +1,14 @@
-import { useEffect, useState, type FC } from 'react';
-import { ArrowLeft, Bluetooth, CheckCircle2, Disc3, Radio, Volume2, VolumeX, Wifi } from 'lucide-react';
+import { useEffect, useRef, useState, type FC } from 'react';
+import { ArrowLeft, Bluetooth, CheckCircle2, Disc3, Radio, RefreshCw, Volume2, VolumeX, Wifi } from 'lucide-react';
 import { useReceiverClient } from '../hooks/useReceiverClient';
-import { getSavedServerOrigin, isRunningInAndroidApk, saveServerOrigin } from '../utils/wsEndpoint';
+import {
+  detectBluetoothSpeakerLabel,
+  detectDeviceIdentityName,
+  getSavedServerOrigin,
+  isRunningInAndroidApk,
+  resolveHighEntropyDeviceName,
+  saveServerOrigin,
+} from '../utils/wsEndpoint';
 
 interface ReceiverViewProps {
   roomId: string;
@@ -16,13 +23,9 @@ export const ReceiverView: FC<ReceiverViewProps> = ({
   onBackToHost,
   isStandaloneReceiver,
 }) => {
-  const [deviceName, setDeviceName] = useState(() => {
-    const ua = navigator.userAgent;
-    if (/iPhone/i.test(ua)) return 'iPhone Loa Bluetooth';
-    if (/Android/i.test(ua)) return 'Android Loa Bluetooth';
-    return 'Thiết bị nhận Wi-Fi';
-  });
-  const [speakerLabel, setSpeakerLabel] = useState('Loa Bluetooth Phòng Khách');
+  const [deviceName, setDeviceName] = useState(() => detectDeviceIdentityName());
+  const [speakerLabel, setSpeakerLabel] = useState(() => detectBluetoothSpeakerLabel());
+  const userEditedNameRef = useRef(false);
   const [roomDraft, setRoomDraft] = useState(roomId);
   const [serverOrigin, setServerOrigin] = useState(() => getSavedServerOrigin());
   const [serverInput, setServerInput] = useState(() => getSavedServerOrigin());
@@ -59,11 +62,34 @@ export const ReceiverView: FC<ReceiverViewProps> = ({
     updateSelf,
   } = useReceiverClient(roomId, deviceName, speakerLabel, serverOrigin || undefined);
 
+  useEffect(() => {
+    let active = true;
+    resolveHighEntropyDeviceName().then((resolved) => {
+      if (!active || userEditedNameRef.current) return;
+      if (resolved && resolved !== deviceName) {
+        setDeviceName(resolved);
+        updateSelf({ name: resolved });
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [wsConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const meterLevel = Math.max(0, Math.min(100, ((signalDb + 60) / 60) * 100));
 
   const handleRenameSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     updateSelf({ name: deviceName, speakerLabel });
+  };
+
+  const handleRefreshHardwareIdentity = async () => {
+    userEditedNameRef.current = false;
+    const detectedName = await resolveHighEntropyDeviceName();
+    const detectedBt = detectBluetoothSpeakerLabel();
+    setDeviceName(detectedName);
+    setSpeakerLabel(detectedBt);
+    updateSelf({ name: detectedName, speakerLabel: detectedBt });
   };
 
   const handleJoinRoom = (e: React.FormEvent) => {
@@ -291,13 +317,16 @@ export const ReceiverView: FC<ReceiverViewProps> = ({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label htmlFor="rec-name" className="block text-xs text-slate-600 mb-1">
-                Tên điện thoại
+                Tên thiết bị
               </label>
               <input
                 id="rec-name"
                 type="text"
                 value={deviceName}
-                onChange={(e) => setDeviceName(e.target.value)}
+                onChange={(e) => {
+                  userEditedNameRef.current = true;
+                  setDeviceName(e.target.value);
+                }}
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-sky-600 focus:outline-none"
               />
             </div>
@@ -314,12 +343,22 @@ export const ReceiverView: FC<ReceiverViewProps> = ({
               />
             </div>
           </div>
-          <button
-            type="submit"
-            className="rounded-lg border border-slate-200 bg-slate-100 hover:bg-slate-200 px-4 py-2 text-xs font-medium text-slate-800 cursor-pointer"
-          >
-            Lưu tên hiển thị lên Máy chủ
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="submit"
+              className="rounded-lg border border-slate-200 bg-slate-100 hover:bg-slate-200 px-4 py-2 text-xs font-medium text-slate-800 cursor-pointer"
+            >
+              Lưu tên hiển thị lên Máy chủ
+            </button>
+            <button
+              type="button"
+              onClick={handleRefreshHardwareIdentity}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-3.5 py-2 text-xs font-medium text-slate-700 cursor-pointer"
+            >
+              <RefreshCw className="h-3.5 w-3.5 text-sky-600" />
+              Lấy tên thiết bị
+            </button>
+          </div>
         </form>
 
         <form onSubmit={handleJoinRoom} className="border-t border-slate-200 pt-4 flex items-end gap-2">

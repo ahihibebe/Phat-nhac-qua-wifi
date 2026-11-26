@@ -98,12 +98,51 @@ export function useHostStreamer(roomId: string) {
   const seqRef = useRef(1);
   const nextTickPerfMsRef = useRef(0);
   const schedulerTimerRef = useRef<number | null>(null);
+  const tickerWorkerRef = useRef<Worker | null>(null);
+  const tickerWorkerUrlRef = useRef<string | null>(null);
   const lastUiSyncPerfRef = useRef(0);
   const bytesWindowRef = useRef<{ ts: number; bytes: number }[]>([]);
   const totalPacketsRef = useRef(0);
   const totalBytesRef = useRef(0);
   const advanceTrackCallbackRef = useRef<() => void>(() => {});
   const decodeInFlightRef = useRef<Map<string, Promise<AudioBuffer | null>>>(new Map());
+
+  const updateBackgroundState = useCallback(
+    (playing: boolean, track: DecodedTrack | null) => {
+      const title = track ? track.title : 'MusicToBlutooth Truyền';
+      const subtitle = playing
+        ? `Đang phát qua Wi-Fi · Phòng ${roomId}`
+        : 'Đang tạm dừng phát nhạc';
+
+      window.__MTB_ANDROID__?.setBackgroundPlayback?.(true, title, subtitle);
+
+      if ('mediaSession' in navigator) {
+        try {
+          if (track) {
+            navigator.mediaSession.metadata = new MediaMetadata({
+              title: track.title,
+              artist: track.folderName || 'MusicToBlutooth',
+              album: `Phòng ${roomId} · ${track.formatCategory}`,
+            });
+          }
+          navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+        } catch {
+          // ignore MediaSession errors on older browsers
+        }
+      }
+    },
+    [roomId]
+  );
+
+  const stopBgTicker = useCallback(() => {
+    if (schedulerTimerRef.current !== null) {
+      clearInterval(schedulerTimerRef.current);
+      schedulerTimerRef.current = null;
+    }
+    if (tickerWorkerRef.current) {
+      tickerWorkerRef.current.postMessage('stop');
+    }
+  }, []);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -371,19 +410,17 @@ export function useHostStreamer(roomId: string) {
   }, [roomId, sendControl]);
 
   const stopPlaybackLoop = useCallback(() => {
-    if (schedulerTimerRef.current !== null) {
-      clearInterval(schedulerTimerRef.current);
-      schedulerTimerRef.current = null;
-    }
+    stopBgTicker();
     stopMonitorSource();
     isPlayingRef.current = false;
     setIsPlaying(false);
     setSpectrumBands(new Array(32).fill(0));
+    updateBackgroundState(false, activeTrackRef.current);
     sendControl({
       type: 'host:settings',
       settings: { isPlaying: false },
     });
-  }, [sendControl, stopMonitorSource]);
+  }, [sendControl, stopBgTicker, stopMonitorSource, updateBackgroundState]);
 
   const scheduleFrameTick = useCallback(() => {
     const track = activeTrackRef.current;
@@ -541,11 +578,32 @@ export function useHostStreamer(roomId: string) {
       isPlayingRef.current = true;
       setIsPlaying(true);
       nextTickPerfMsRef.current = performance.now();
+      updateBackgroundState(true, track);
 
-      if (schedulerTimerRef.current !== null) {
-        clearInterval(schedulerTimerRef.current);
+      stopBgTicker();
+      try {
+        if (!tickerWorkerRef.current) {
+          const workerCode = `
+            let id = null;
+            self.onmessage = function(e) {
+              if (e.data === 'start') {
+                if (id !== null) clearInterval(id);
+                id = setInterval(function() { self.postMessage('t'); }, 10);
+              } else if (e.data === 'stop') {
+                if (id !== null) clearInterval(id);
+                id = null;
+              }
+            };
+          `;
+          const url = URL.createObjectURL(new Blob([workerCode], { type: 'application/javascript' }));
+          tickerWorkerUrlRef.current = url;
+          tickerWorkerRef.current = new Worker(url);
+        }
+        tickerWorkerRef.current.onmessage = () => scheduleFrameTick();
+        tickerWorkerRef.current.postMessage('start');
+      } catch {
+        schedulerTimerRef.current = window.setInterval(scheduleFrameTick, 10);
       }
-      schedulerTimerRef.current = window.setInterval(scheduleFrameTick, 10);
 
       sendControl({
         type: 'host:settings',
@@ -568,7 +626,15 @@ export function useHostStreamer(roomId: string) {
         }
       }
     },
-    [ensureAudioContext, ensureTrackDecoded, scheduleFrameTick, sendControl, startContinuousMonitor]
+    [
+      ensureAudioContext,
+      ensureTrackDecoded,
+      scheduleFrameTick,
+      sendControl,
+      startContinuousMonitor,
+      stopBgTicker,
+      updateBackgroundState,
+    ]
   );
 
   const pausePlayback = useCallback(() => {
@@ -1073,14 +1139,43 @@ export function useHostStreamer(roomId: string) {
   );
 
   useEffect(() => {
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.setActionHandler('play', () => startPlayback());
+        navigator.mediaSession.setActionHandler('pause', () => pausePlayback());
+        navigator.mediaSession.setActionHandler('nexttrack', () => nextTrack());
+        navigator.mediaSession.setActionHandler('previoustrack', () => previousTrack());
+      } catch {
+        // ignore unsupported MediaSession action
+      }
+    }
+  }, [nextTrack, pausePlayback, previousTrack, startPlayback]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (isPlayingRef.current && audioCtxRef.current?.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
+  useEffect(() => {
     return () => {
-      if (schedulerTimerRef.current !== null) {
-        clearInterval(schedulerTimerRef.current);
+      stopBgTicker();
+      if (tickerWorkerRef.current) {
+        tickerWorkerRef.current.terminate();
+        tickerWorkerRef.current = null;
+      }
+      if (tickerWorkerUrlRef.current) {
+        URL.revokeObjectURL(tickerWorkerUrlRef.current);
+        tickerWorkerUrlRef.current = null;
       }
       stopMonitorSource();
       audioCtxRef.current?.close().catch(() => {});
     };
-  }, [stopMonitorSource]);
+  }, [stopBgTicker, stopMonitorSource]);
 
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || null;
 

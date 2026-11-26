@@ -25,12 +25,68 @@ declare global {
       getLanOrigin?: () => string;
       getWsUrl?: () => string;
       getRole?: () => string;
+      getDeviceName?: () => string;
+      getBluetoothSpeakerName?: () => string;
+      setBackgroundPlayback?: (active: boolean, title: string, subtitle: string) => void;
       scanDeviceMusic?: () => string;
     };
   }
 }
 
 const CUSTOM_ORIGIN_KEY = 'mtb_custom_server_origin';
+
+export function detectDeviceIdentityName(): string {
+  const nativeName = window.__MTB_ANDROID__?.getDeviceName?.()?.trim();
+  if (nativeName) return nativeName;
+
+  const ua = navigator.userAgent || '';
+  // Try extracting Android model token e.g. "(Linux; Android 14; SM-S918B Build/...)"
+  const androidMatch = ua.match(/Android[^;]*;\s*([^;)]+?)(?:\s+Build\/|[;)])/i);
+  if (androidMatch && androidMatch[1]) {
+    const model = androidMatch[1].trim();
+    if (model && model.toUpperCase() !== 'K' && model.toLowerCase() !== 'wv') {
+      return model;
+    }
+  }
+
+  if (/iPhone/i.test(ua)) return 'iPhone';
+  if (/iPad/i.test(ua)) return 'iPad';
+  if (/Macintosh|Mac OS X/i.test(ua)) return 'Mac';
+  if (/Windows NT/i.test(ua)) return 'Windows PC';
+  if (/Android/i.test(ua)) return 'Điện thoại Android';
+  if (/Linux/i.test(ua)) return 'Thiết bị Linux';
+  return 'Thiết bị nhận Wi-Fi';
+}
+
+export async function resolveHighEntropyDeviceName(): Promise<string> {
+  const nativeName = window.__MTB_ANDROID__?.getDeviceName?.()?.trim();
+  if (nativeName) return nativeName;
+
+  const nav = navigator as Navigator & {
+    userAgentData?: {
+      platform?: string;
+      getHighEntropyValues?: (hints: string[]) => Promise<{ model?: string; platform?: string }>;
+    };
+  };
+
+  if (nav.userAgentData?.getHighEntropyValues) {
+    try {
+      const info = await nav.userAgentData.getHighEntropyValues(['model', 'platform']);
+      const model = info.model?.trim();
+      if (model) return model;
+    } catch {
+      // ignore UA-CH error
+    }
+  }
+
+  return detectDeviceIdentityName();
+}
+
+export function detectBluetoothSpeakerLabel(): string {
+  const nativeBt = window.__MTB_ANDROID__?.getBluetoothSpeakerName?.()?.trim();
+  if (nativeBt) return nativeBt;
+  return 'Loa Bluetooth đang kết nối';
+}
 
 export function isRunningInAndroidApk(): boolean {
   return (

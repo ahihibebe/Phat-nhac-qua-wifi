@@ -6,11 +6,14 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
@@ -30,6 +33,7 @@ import java.io.ByteArrayOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -65,6 +69,77 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
+    private fun resolveFriendlyDeviceName(): String {
+        val customName = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+                Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
+            } else {
+                Settings.Global.getString(contentResolver, "device_name")
+            }
+        } catch (_: Exception) {
+            null
+        }
+        if (!customName.isNullOrBlank()) {
+            return customName.trim()
+        }
+
+        val manufacturer = (Build.MANUFACTURER ?: "").trim()
+        val model = (Build.MODEL ?: "").trim()
+        if (model.isEmpty()) return "Android Thiết bị"
+        return if (model.lowercase(Locale.ROOT).startsWith(manufacturer.lowercase(Locale.ROOT))) {
+            model
+        } else {
+            val prettyMfg = manufacturer.replaceFirstChar {
+                if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString()
+            }
+            "$prettyMfg $model".trim()
+        }
+    }
+
+    private fun resolveBluetoothSpeakerName(): String {
+        return try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return ""
+            val outputs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            for (dev in outputs) {
+                val isBt = dev.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                    dev.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        (dev.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                            dev.type == AudioDeviceInfo.TYPE_BLE_SPEAKER))
+                if (isBt) {
+                    val label = dev.productName?.toString()?.trim()
+                    if (!label.isNullOrBlank()) return label
+                }
+            }
+            ""
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun updateBackgroundService(active: Boolean, title: String, subtitle: String) {
+        try {
+            if (active) {
+                val intent = Intent(this, AudioBackgroundService::class.java).apply {
+                    action = AudioBackgroundService.ACTION_START_OR_UPDATE
+                    putExtra(AudioBackgroundService.EXTRA_TITLE, title)
+                    putExtra(AudioBackgroundService.EXTRA_SUBTITLE, subtitle)
+                }
+                ContextCompat.startForegroundService(this, intent)
+            } else {
+                val intent = Intent(this, AudioBackgroundService::class.java).apply {
+                    action = AudioBackgroundService.ACTION_STOP
+                }
+                startService(intent)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     inner class AndroidBridge(
         private val lanOrigin: String,
         private val wsUrl: String,
@@ -81,6 +156,19 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun getRole(): String = role
+
+        @JavascriptInterface
+        fun getDeviceName(): String = resolveFriendlyDeviceName()
+
+        @JavascriptInterface
+        fun getBluetoothSpeakerName(): String = resolveBluetoothSpeakerName()
+
+        @JavascriptInterface
+        fun setBackgroundPlayback(active: Boolean, title: String, subtitle: String) {
+            runOnUiThread {
+                updateBackgroundService(active, title, subtitle)
+            }
+        }
 
         @JavascriptInterface
         fun scanDeviceMusic(): String {
@@ -223,6 +311,22 @@ class MainActivity : AppCompatActivity() {
 
         acquireWifiMulticastLock()
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
+        // Start foreground service immediately so Wi-Fi server and audio continue seamlessly in background
+        val initTitle = if (BuildConfig.APP_ROLE == "host") {
+            "MusicToBlutooth Truyền sẵn sàng"
+        } else {
+            "MusicToBlutooth Nhận sẵn sàng"
+        }
+        updateBackgroundService(true, initTitle, "Chạy nền qua Wi-Fi ổn định")
+
         var lanOrigin = ""
         var wsUrl = ""
         if (BuildConfig.APP_ROLE == "host") {
@@ -327,6 +431,21 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl(startUrl)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Ensure WebView timers stay active
+        if (::webView.isInitialized) {
+            webView.onResume()
+            webView.resumeTimers()
+        }
+    }
+
+    override fun onPause() {
+        // Intentionally do NOT call webView.onPause() or webView.pauseTimers()
+        // so background Wi-Fi audio streaming and receiving continue uninterrupted.
+        super.onPause()
+    }
+
     private fun startUdpHostDiscovery() {
         discoveryRunning = true
         Thread {
@@ -368,6 +487,7 @@ class MainActivity : AppCompatActivity() {
         discoveryRunning = false
         try { discoverySocket?.close() } catch (_: Exception) {}
         localWifiServer?.stop()
+        updateBackgroundService(false, "", "")
         try {
             if (multicastLock?.isHeld == true) {
                 multicastLock?.release()

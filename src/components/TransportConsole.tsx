@@ -9,7 +9,6 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
-  Tv,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -35,8 +34,6 @@ interface TransportConsoleProps {
   onToggleLocalMonitor: () => void;
   localMonitorVolume: number;
   onChangeLocalMonitorVolume: (val: number) => void;
-  tvMode?: boolean;
-  onToggleTvMode?: () => void;
   onPlay: () => void;
   onPause: () => void;
   onStop: () => void;
@@ -67,8 +64,6 @@ export const TransportConsole: FC<TransportConsoleProps> = ({
   onToggleLocalMonitor,
   localMonitorVolume,
   onChangeLocalMonitorVolume,
-  tvMode = false,
-  onToggleTvMode,
   onPlay,
   onPause,
   onStop,
@@ -258,22 +253,6 @@ export const TransportConsole: FC<TransportConsoleProps> = ({
             <Repeat className="h-3.5 w-3.5" />
             Lặp bài
           </button>
-
-          {onToggleTvMode && (
-            <button
-              type="button"
-              onClick={onToggleTvMode}
-              aria-pressed={tvMode}
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
-                tvMode
-                  ? 'border-sky-600 bg-sky-600 text-white'
-                  : 'border-slate-300 bg-slate-50 text-slate-800 hover:bg-slate-100'
-              }`}
-            >
-              <Tv className="h-3.5 w-3.5" />
-              Chế độ Music TV
-            </button>
-          )}
         </div>
 
         {/* Real-time 32-band PCM Energy Monitor */}

@@ -105,8 +105,13 @@ export function useReceiverClient(
     audioReadyRef.current = true;
     setAudioReady(true);
     nextScheduledTimeRef.current = 0;
+    window.__MTB_ANDROID__?.setBackgroundPlayback?.(
+      true,
+      roomSettings.trackTitle || 'MusicToBlutooth Nhận',
+      `Đang kết nối loa Bluetooth · Phòng ${roomId}`
+    );
     await refreshOutputDevices();
-  }, [refreshOutputDevices, roomSettings.sampleRate]);
+  }, [refreshOutputDevices, roomId, roomSettings.sampleRate, roomSettings.trackTitle]);
 
   const selectAudioOutput = useCallback(
     async (deviceId: string) => {
@@ -275,6 +280,27 @@ export function useReceiverClient(
             setDeviceConfig(msg.device);
           } else if (msg.type === 'room:settings') {
             setRoomSettings(msg.settings);
+            if (audioReadyRef.current) {
+              window.__MTB_ANDROID__?.setBackgroundPlayback?.(
+                true,
+                msg.settings.trackTitle || 'MusicToBlutooth Nhận',
+                msg.settings.isPlaying
+                  ? `Đang phát ra loa Bluetooth · Phòng ${roomId}`
+                  : `Đang chờ máy chủ · Phòng ${roomId}`
+              );
+              if ('mediaSession' in navigator) {
+                try {
+                  navigator.mediaSession.metadata = new MediaMetadata({
+                    title: msg.settings.trackTitle,
+                    artist: 'MusicToBlutooth Nhận',
+                    album: `Phòng ${roomId}`,
+                  });
+                  navigator.mediaSession.playbackState = msg.settings.isPlaying ? 'playing' : 'paused';
+                } catch {
+                  // ignore
+                }
+              }
+            }
           } else if (msg.type === 'room:state') {
             setHostConnected(msg.hostConnected);
             setRoomSettings(msg.settings);
@@ -314,6 +340,16 @@ export function useReceiverClient(
       audioCtxRef.current = null;
     };
   }, [initialName, initialSpeaker, roomId, sendControl, serverOriginOverride]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (audioReadyRef.current && audioCtxRef.current?.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   const updateSelf = useCallback(
     (patch: {

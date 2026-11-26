@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import { DeviceMatrix } from './components/DeviceMatrix';
-import { MusicTvView } from './components/MusicTvView';
 import { PairingModal } from './components/PairingModal';
 import { ReceiverView } from './components/ReceiverView';
 import { ReleaseSection } from './components/ReleaseSection';
@@ -30,7 +30,7 @@ function HostDashboard({
 }) {
   const [activeTab, setActiveTab] = useState<ConsoleTab>('console');
   const [pairingOpen, setPairingOpen] = useState(false);
-  const [tvMode, setTvMode] = useState(false);
+  const [releasesOpen, setReleasesOpen] = useState(false);
 
   const host = useHostStreamer(roomId);
 
@@ -40,55 +40,6 @@ function HostDashboard({
     url.searchParams.delete('role');
     window.history.replaceState({}, '', url.toString());
   }, [roomId]);
-
-  if (tvMode) {
-    return (
-      <>
-        <MusicTvView
-          roomId={roomId}
-          tracks={host.tracks}
-          activeTrack={host.activeTrack}
-          savedPlaylists={host.savedPlaylists}
-          isPlaying={host.isPlaying}
-          isScanning={host.isScanning}
-          isDecodingTrack={host.isDecodingTrack}
-          scanProgress={host.scanProgress}
-          loopTrack={host.loopTrack}
-          onToggleLoop={() => host.setLoopTrack((v) => !v)}
-          shuffle={host.shuffle}
-          onToggleShuffle={() => host.setShuffle((v) => !v)}
-          currentPositionSec={host.currentPositionSec}
-          receiverCount={host.receivers.length}
-          wsConnected={host.wsConnected}
-          localMonitorEnabled={host.localMonitorEnabled}
-          onToggleLocalMonitor={() => host.setLocalMonitorEnabled((v) => !v)}
-          localMonitorVolume={host.localMonitorVolume}
-          onChangeLocalMonitorVolume={host.setLocalMonitorVolume}
-          spectrumBands={host.spectrumBands}
-          onPlay={() => host.startPlayback()}
-          onPause={host.pausePlayback}
-          onNext={host.nextTrack}
-          onPrevious={host.previousTrack}
-          onSeek={host.seekTo}
-          onSelectTrack={host.selectTrack}
-          onLoadFiles={host.loadLocalAudioFiles}
-          onScanDirectoryFast={host.scanDirectoryFast}
-          onSavePlaylist={host.saveCurrentPlaylist}
-          onLoadPlaylist={host.loadPlaylist}
-          onDeletePlaylist={host.deletePlaylist}
-          onOpenPairing={() => setPairingOpen(true)}
-          onExitTvMode={() => setTvMode(false)}
-        />
-        <PairingModal
-          open={pairingOpen}
-          onClose={() => setPairingOpen(false)}
-          roomId={roomId}
-          onChangeRoomId={onChangeRoomId}
-          onSwitchToReceiver={onSwitchToStandaloneReceiver}
-        />
-      </>
-    );
-  }
 
   if (activeTab === 'receiver') {
     return (
@@ -147,8 +98,6 @@ function HostDashboard({
               onToggleLocalMonitor={() => host.setLocalMonitorEnabled((v) => !v)}
               localMonitorVolume={host.localMonitorVolume}
               onChangeLocalMonitorVolume={host.setLocalMonitorVolume}
-              tvMode={tvMode}
-              onToggleTvMode={() => setTvMode(true)}
               onPlay={() => host.startPlayback()}
               onPause={host.pausePlayback}
               onStop={host.stopAndRewind}
@@ -158,38 +107,22 @@ function HostDashboard({
               onUpdateSettings={host.updateStreamSettings}
             />
 
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
-              <div className="lg:col-span-6">
-                <TrackLibrary
-                  tracks={host.tracks}
-                  activeTrackId={host.activeTrack?.id || null}
-                  savedPlaylists={host.savedPlaylists}
-                  isPlaying={host.isPlaying}
-                  isScanning={host.isScanning}
-                  scanProgress={host.scanProgress}
-                  decodeError={host.decodeError}
-                  onSelectTrack={host.selectTrack}
-                  onRemoveTrack={host.removeTrack}
-                  onLoadFiles={host.loadLocalAudioFiles}
-                  onScanDirectoryFast={host.scanDirectoryFast}
-                  onSavePlaylist={host.saveCurrentPlaylist}
-                  onLoadPlaylist={host.loadPlaylist}
-                  onDeletePlaylist={host.deletePlaylist}
-                />
-              </div>
-              <div className="lg:col-span-6">
-                <DeviceMatrix
-                  receivers={host.receivers}
-                  roomId={roomId}
-                  onUpdateDevice={host.updateDevice}
-                  onSendTestTone={host.sendTestTone}
-                  onKickDevice={host.kickDevice}
-                  onOpenPairing={() => setPairingOpen(true)}
-                />
-              </div>
-            </div>
-
-            <ReleaseSection />
+            <TrackLibrary
+              tracks={host.tracks}
+              activeTrackId={host.activeTrack?.id || null}
+              savedPlaylists={host.savedPlaylists}
+              isPlaying={host.isPlaying}
+              isScanning={host.isScanning}
+              scanProgress={host.scanProgress}
+              decodeError={host.decodeError}
+              onSelectTrack={host.selectTrack}
+              onRemoveTrack={host.removeTrack}
+              onLoadFiles={host.loadLocalAudioFiles}
+              onScanDirectoryFast={host.scanDirectoryFast}
+              onSavePlaylist={host.saveCurrentPlaylist}
+              onLoadPlaylist={host.loadPlaylist}
+              onDeletePlaylist={host.deletePlaylist}
+            />
           </>
         )}
 
@@ -209,9 +142,13 @@ function HostDashboard({
         <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-4">
           <span>MusicToBlutooth · Phòng đồng bộ {roomId}</span>
           <div className="flex items-center gap-5">
-            <a href="#releases" className="text-slate-600 hover:text-slate-900 transition-colors">
+            <button
+              type="button"
+              onClick={() => setReleasesOpen(true)}
+              className="text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
+            >
               Phiên bản APK (Truyền & Nhận)
-            </a>
+            </button>
             <button
               type="button"
               onClick={() => setPairingOpen(true)}
@@ -230,6 +167,31 @@ function HostDashboard({
         onChangeRoomId={onChangeRoomId}
         onSwitchToReceiver={onSwitchToStandaloneReceiver}
       />
+
+      {releasesOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Phát hành Android APK song song"
+          onClick={() => setReleasesOpen(false)}
+        >
+          <div
+            className="relative w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setReleasesOpen(false)}
+              aria-label="Đóng cửa sổ tải APK"
+              className="absolute right-4 top-4 z-10 rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-slate-50 hover:text-slate-800 cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <ReleaseSection />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
