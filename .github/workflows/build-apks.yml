@@ -2,8 +2,13 @@ name: Build & Release Parallel APKs (Truyền & Nhận)
 
 on:
   push:
+    branches:
+      - '**'
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - '**'
   workflow_dispatch:
 
 permissions:
@@ -19,11 +24,11 @@ jobs:
         include:
           - flavor: Transmitter
             task: assembleTransmitterRelease
-            raw_apk: android/app/build/outputs/apk/transmitter/release/app-transmitter-release.apk
+            apk_dir: android/app/build/outputs/apk/transmitter/release
             release_name: MusicToBlutooth-Truyen.apk
           - flavor: Receiver
             task: assembleReceiverRelease
-            raw_apk: android/app/build/outputs/apk/receiver/release/app-receiver-release.apk
+            apk_dir: android/app/build/outputs/apk/receiver/release
             release_name: MusicToBlutooth-Nhan.apk
 
     steps:
@@ -36,6 +41,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK Licenses
+        run: yes | sdkmanager --licenses > /dev/null 2>&1 || true
+
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -45,8 +56,15 @@ jobs:
         working-directory: android
         run: gradle :app:${{ matrix.task }} --no-daemon --stacktrace
 
-      - name: Rename APK output
-        run: cp "${{ matrix.raw_apk }}" "${{ matrix.release_name }}"
+      - name: Locate & Rename APK output
+        run: |
+          APK_FILE=$(find "${{ matrix.apk_dir }}" -maxdepth 2 -type f -name "*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "Không tìm thấy tệp APK trong ${{ matrix.apk_dir }}"
+            exit 1
+          fi
+          cp "$APK_FILE" "${{ matrix.release_name }}"
+          ls -lh "${{ matrix.release_name }}"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -57,6 +75,7 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     needs: build-apk
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Download Transmitter APK
@@ -74,8 +93,9 @@ jobs:
       - name: Create Release & Attach APKs
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name == 'main' && 'v1.0.0' || github.ref_name }}
-          name: MusicToBlutooth ${{ github.ref_name == 'main' && 'v1.0.0' || github.ref_name }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
+          name: MusicToBlutooth ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
+          make_latest: true
           generate_release_notes: true
           files: |
             release-assets/MusicToBlutooth-Truyen.apk

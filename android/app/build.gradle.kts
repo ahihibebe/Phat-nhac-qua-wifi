@@ -40,7 +40,7 @@ android {
 
     signingConfigs {
         getByName("debug") {
-            // Cho phep dong goi nhanh ban Release APK cai dat truc tiep neu chua cau hinh keystore rieng
+            // Ky so nhanh ban Release APK cai dat truc tiep tren Android
         }
     }
 
@@ -65,13 +65,13 @@ android {
     }
 }
 
-// Khac phuc triet de loi checkReleaseDuplicateClasses giua kotlin-stdlib va kotlin-stdlib-jdk8:1.6.0
+// Khac phuc triet de loi checkReleaseDuplicateClasses giua kotlin-stdlib va kotlin-stdlib-jdk8
 configurations.all {
-    exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib-jdk7")
-    exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib-jdk8")
     resolutionStrategy {
         force("org.jetbrains.kotlin:kotlin-stdlib:1.9.24")
         force("org.jetbrains.kotlin:kotlin-stdlib-common:1.9.24")
+        force("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.24")
+        force("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.24")
     }
 }
 
@@ -79,6 +79,6 @@ dependencies {
     implementation(platform("org.jetbrains.kotlin:kotlin-bom:1.9.24"))
     implementation("org.jetbrains.kotlin:kotlin-stdlib:1.9.24")
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.activity:activity-ktx:1.9.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.webkit:webkit:1.11.0")
 }
