@@ -1,7 +1,7 @@
 import type { AudioFormatCategory, SavedPlaylist } from '../types/audio';
 
 const DB_NAME = 'MusicToBlutoothStorage';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_FILES = 'audio_files';
 const PLAYLISTS_KEY = 'mtb_saved_playlists_v1';
 
@@ -9,10 +9,13 @@ export interface StoredAudioFileRecord {
   id: string;
   fileName: string;
   title: string;
+  folderName: string;
   formatCategory: AudioFormatCategory;
   coverUrl: string;
+  durationSec: number;
   fileSizeBytes: number;
-  blob: Blob;
+  blob?: Blob;
+  localMediaUrl?: string;
   addedAt: number;
 }
 
@@ -42,6 +45,25 @@ export async function saveAudioFileRecord(record: StoredAudioFileRecord): Promis
     db.close();
   } catch {
     // Ignore storage quota errors gracefully
+  }
+}
+
+export async function saveAudioFileRecordsBatch(records: StoredAudioFileRecord[]): Promise<void> {
+  if (records.length === 0) return;
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_FILES, 'readwrite');
+      const store = tx.objectStore(STORE_FILES);
+      for (const rec of records) {
+        store.put(rec);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  } catch {
+    // ignore
   }
 }
 

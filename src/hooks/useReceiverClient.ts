@@ -174,21 +174,16 @@ export function useReceiverClient(
           if (!parsed) return;
 
           packetsReceivedRef.current += 1;
-          setPacketsReceived(packetsReceivedRef.current);
-          setSignalDb(parsed.rmsDb);
 
           if (!parsed.checksumValid) {
             packetsDroppedRef.current += 1;
-            setPacketsDropped(packetsDroppedRef.current);
             return;
           }
 
           if (!parsed.isTestTone && lastSeqRef.current !== null && parsed.seq > lastSeqRef.current + 1) {
-            // Normal discontinuity if track restarted or jumped
             const gap = parsed.seq - lastSeqRef.current - 1;
             if (gap < 20) {
               packetsDroppedRef.current += gap;
-              setPacketsDropped(packetsDroppedRef.current);
             }
           }
           if (!parsed.isTestTone) {
@@ -237,13 +232,13 @@ export function useReceiverClient(
           const delayOffsetMs = cfg?.delayOffsetMs || 0;
           const targetLocalMs = parsed.playAtServerMs + delayOffsetMs - serverOffsetMsRef.current;
           const deltaSec = (targetLocalMs - Date.now()) / 1000;
-          const desiredStartCtxTime = ctx.currentTime + Math.max(0.012, deltaSec);
-          const frameDurSec = parsed.frameSamples / parsed.sampleRate;
+          const desiredStartCtxTime = ctx.currentTime + Math.max(0.015, deltaSec);
+          const frameDurSec = audioBuf.duration;
 
           let startAt = desiredStartCtxTime;
           if (
             nextScheduledTimeRef.current > ctx.currentTime &&
-            Math.abs(nextScheduledTimeRef.current - desiredStartCtxTime) < 0.045
+            Math.abs(nextScheduledTimeRef.current - desiredStartCtxTime) < 0.085
           ) {
             startAt = nextScheduledTimeRef.current;
           }
@@ -251,7 +246,13 @@ export function useReceiverClient(
           src.start(startAt);
           nextScheduledTimeRef.current = startAt + frameDurSec;
           bufferMsRef.current = Math.max(0, (nextScheduledTimeRef.current - ctx.currentTime) * 1000);
-          setBufferMs(Math.round(bufferMsRef.current));
+
+          if ((packetsReceivedRef.current & 3) === 0) {
+            setPacketsReceived(packetsReceivedRef.current);
+            setPacketsDropped(packetsDroppedRef.current);
+            setSignalDb(parsed.rmsDb);
+            setBufferMs(Math.round(bufferMsRef.current));
+          }
           return;
         }
 

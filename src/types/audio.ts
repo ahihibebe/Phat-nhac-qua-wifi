@@ -41,22 +41,26 @@ export interface DecodedTrack {
   id: string;
   title: string;
   artistOrSource: string;
+  folderName: string;
   formatLabel: string;
   formatCategory: AudioFormatCategory;
   coverUrl: string;
   durationSec: number;
   sampleRate: number;
   channels: number;
-  buffer: AudioBuffer;
+  buffer: AudioBuffer | null;
   peaks: number[]; // Normalized 0..1 waveform preview peaks
   isBuiltIn: boolean;
   fileSizeBytes?: number;
+  rawBlob?: Blob;
+  localMediaUrl?: string;
 }
 
 export interface SavedPlaylist {
   id: string;
   name: string;
   createdAt: number;
+  folderName?: string;
   trackIds: string[];
   trackTitles: string[];
 }

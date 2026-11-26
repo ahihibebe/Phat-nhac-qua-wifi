@@ -5,6 +5,18 @@ export interface AndroidBridgeConfig {
   discoveredHostOrigin?: string;
 }
 
+export interface AndroidScannedSong {
+  id: string;
+  title: string;
+  artist: string;
+  folderName: string;
+  formatCategory: string;
+  durationSec: number;
+  fileSizeBytes: number;
+  localMediaUrl: string;
+  coverUrl: string;
+}
+
 declare global {
   interface Window {
     __MTB_CONFIG__?: AndroidBridgeConfig;
@@ -13,6 +25,7 @@ declare global {
       getLanOrigin?: () => string;
       getWsUrl?: () => string;
       getRole?: () => string;
+      scanDeviceMusic?: () => string;
     };
   }
 }

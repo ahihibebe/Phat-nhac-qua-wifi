@@ -2,6 +2,8 @@ import { useMemo, useRef, useState, type FC } from 'react';
 import {
   BookmarkPlus,
   Disc3,
+  Folder,
+  FolderOpen,
   FolderSearch,
   FolderUp,
   ListMusic,
@@ -23,12 +25,13 @@ interface TrackLibraryProps {
   onRemoveTrack: (trackId: string) => void;
   onLoadFiles: (files: FileList | File[]) => void;
   onScanDirectoryFast: () => Promise<boolean>;
-  onSavePlaylist: (name: string) => void;
+  onSavePlaylist: (name: string, folderName?: string) => void;
   onLoadPlaylist: (playlistId: string) => void;
   onDeletePlaylist: (playlistId: string) => void;
 }
 
 function formatDuration(sec: number): string {
+  if (!sec || sec <= 0) return '--:--';
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
@@ -56,30 +59,58 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [dragging, setDragging] = useState(false);
   const [formatFilter, setFormatFilter] = useState<'ALL' | AudioFormatCategory>('ALL');
+  const [selectedFolder, setSelectedFolder] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
+  const [brokenCovers, setBrokenCovers] = useState<Record<string, boolean>>({});
+
+  // Group scanned & built-in tracks by folderName
+  const folders = useMemo(() => {
+    const map = new Map<string, { name: string; tracks: DecodedTrack[]; coverUrl: string }>();
+    for (const t of tracks) {
+      const folder = t.folderName || 'Nhạc trên máy';
+      const existing = map.get(folder);
+      if (existing) {
+        existing.tracks.push(t);
+      } else {
+        map.set(folder, { name: folder, tracks: [t], coverUrl: t.coverUrl });
+      }
+    }
+    return Array.from(map.values());
+  }, [tracks]);
+
+  const effectiveSelectedFolder =
+    selectedFolder !== 'ALL' && !folders.some((f) => f.name === selectedFolder)
+      ? 'ALL'
+      : selectedFolder;
+
+  const folderFilteredTracks = useMemo(() => {
+    if (effectiveSelectedFolder === 'ALL') return tracks;
+    return tracks.filter((t) => (t.folderName || 'Nhạc trên máy') === effectiveSelectedFolder);
+  }, [effectiveSelectedFolder, tracks]);
 
   const formatCounts = useMemo(() => {
-    const counts: Record<string, number> = { ALL: tracks.length };
-    for (const t of tracks) {
+    const counts: Record<string, number> = { ALL: folderFilteredTracks.length };
+    for (const t of folderFilteredTracks) {
       counts[t.formatCategory] = (counts[t.formatCategory] || 0) + 1;
     }
     return counts;
-  }, [tracks]);
+  }, [folderFilteredTracks]);
 
   const filteredTracks = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return tracks.filter((t) => {
+    return folderFilteredTracks.filter((t) => {
       if (formatFilter !== 'ALL' && t.formatCategory !== formatFilter) return false;
       if (!q) return true;
       return (
         t.title.toLowerCase().includes(q) ||
         t.formatLabel.toLowerCase().includes(q) ||
-        t.artistOrSource.toLowerCase().includes(q)
+        t.artistOrSource.toLowerCase().includes(q) ||
+        t.folderName.toLowerCase().includes(q)
       );
     });
-  }, [formatFilter, searchQuery, tracks]);
+  }, [folderFilteredTracks, formatFilter, searchQuery]);
 
   const handleQuickFolderScan = async () => {
     const handled = await onScanDirectoryFast();
@@ -99,9 +130,17 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
   const handleSavePlaylistSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!playlistName.trim()) return;
-    onSavePlaylist(playlistName.trim());
+    const folderScope = effectiveSelectedFolder !== 'ALL' ? effectiveSelectedFolder : undefined;
+    onSavePlaylist(playlistName.trim(), folderScope);
     setPlaylistName('');
     setShowSaveForm(false);
+  };
+
+  const handlePlayFolder = (folderName: string) => {
+    const folder = folders.find((f) => f.name === folderName);
+    if (!folder || folder.tracks.length === 0) return;
+    setSelectedFolder(folderName);
+    onSelectTrack(folder.tracks[0].id, true);
   };
 
   return (
@@ -109,10 +148,10 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200">
         <div>
           <h2 className="font-display text-base font-bold text-slate-900">
-            Kho nhạc & Danh sách phát
+            Kho nhạc & Thư mục trên máy
           </h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            Quét nhanh thư mục nhạc, phân loại định dạng và lưu danh sách phát ngay trên máy.
+            Quét nhanh thư mục lưu danh sách để phát ngay, phân loại định dạng và trích xuất ảnh bìa.
           </p>
         </div>
 
@@ -153,7 +192,9 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
             <FolderSearch className="h-3.5 w-3.5" />
             {isScanning && scanProgress
               ? `Đang quét ${scanProgress.scanned}/${scanProgress.total}...`
-              : 'Quét nhạc nhanh'}
+              : isScanning
+                ? 'Đang quét nhạc...'
+                : 'Quét nhạc nhanh'}
           </button>
 
           <button
@@ -168,7 +209,12 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
 
           <button
             type="button"
-            onClick={() => setShowSaveForm((v) => !v)}
+            onClick={() => {
+              setPlaylistName(
+                effectiveSelectedFolder !== 'ALL' ? effectiveSelectedFolder : ''
+              );
+              setShowSaveForm((v) => !v);
+            }}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <BookmarkPlus className="h-3.5 w-3.5 text-emerald-600" />
@@ -194,7 +240,7 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
             type="submit"
             className="rounded-lg bg-slate-900 hover:bg-slate-800 px-3.5 py-1.5 text-xs font-semibold text-white cursor-pointer"
           >
-            Lưu ({tracks.length} bài)
+            Lưu ({folderFilteredTracks.length} bài)
           </button>
           <button
             type="button"
@@ -206,11 +252,98 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
         </form>
       )}
 
+      {/* Device Music Folders Strip (Music TV folder browsing) */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs font-medium text-slate-600">
+          <div className="flex items-center gap-1.5">
+            <Folder className="h-3.5 w-3.5 text-sky-600" />
+            <span>Thư mục đã quét ({folders.length})</span>
+          </div>
+          {effectiveSelectedFolder !== 'ALL' && (
+            <button
+              type="button"
+              onClick={() => setSelectedFolder('ALL')}
+              className="text-sky-600 hover:text-sky-700 font-medium cursor-pointer"
+            >
+              Xem tất cả thư mục
+            </button>
+          )}
+        </div>
+
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          <button
+            type="button"
+            onClick={() => setSelectedFolder('ALL')}
+            className={`shrink-0 rounded-lg border px-3 py-2 text-left transition-colors cursor-pointer ${
+              effectiveSelectedFolder === 'ALL'
+                ? 'border-sky-600 bg-sky-50 text-sky-900'
+                : 'border-slate-200 bg-slate-50/70 text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <div className="text-xs font-semibold">Tất cả thư mục</div>
+            <div className="text-[11px] text-slate-500 font-mono tabular-nums mt-0.5">
+              {tracks.length} bài hát
+            </div>
+          </button>
+
+          {folders.map((folder) => {
+            const isSelected = effectiveSelectedFolder === folder.name;
+            return (
+              <div
+                key={folder.name}
+                className={`shrink-0 flex items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors ${
+                  isSelected
+                    ? 'border-sky-600 bg-sky-50 text-sky-900'
+                    : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-800'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setSelectedFolder(folder.name)}
+                  className="flex items-center gap-2 text-left cursor-pointer min-w-0"
+                >
+                  {isSelected ? (
+                    <FolderOpen className="h-4 w-4 text-sky-600 shrink-0" />
+                  ) : (
+                    <Folder className="h-4 w-4 text-slate-400 shrink-0" />
+                  )}
+                  <div className="min-w-0 max-w-[140px]">
+                    <div className="truncate text-xs font-semibold">{folder.name}</div>
+                    <div className="text-[11px] text-slate-500 font-mono tabular-nums">
+                      {folder.tracks.length} bài
+                    </div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handlePlayFolder(folder.name)}
+                  title={`Phát thư mục ${folder.name}`}
+                  aria-label={`Phát thư mục ${folder.name}`}
+                  className="rounded-md bg-sky-600 hover:bg-sky-700 p-1.5 text-white transition-colors cursor-pointer shrink-0"
+                >
+                  <Play className="h-3 w-3 fill-current" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSavePlaylist(folder.name, folder.name)}
+                  title={`Lưu danh sách thư mục ${folder.name}`}
+                  aria-label={`Lưu danh sách thư mục ${folder.name}`}
+                  className="rounded-md border border-slate-200 bg-white hover:bg-slate-100 p-1.5 text-slate-600 transition-colors cursor-pointer shrink-0"
+                >
+                  <BookmarkPlus className="h-3 w-3" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Saved Playlists Strip */}
       {savedPlaylists.length > 0 && (
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
-            <ListMusic className="h-3.5 w-3.5 text-sky-600" />
+            <ListMusic className="h-3.5 w-3.5 text-emerald-600" />
             <span>Danh sách đã lưu ({savedPlaylists.length})</span>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -221,7 +354,12 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
               >
                 <button
                   type="button"
-                  onClick={() => onLoadPlaylist(pl.id)}
+                  onClick={() => {
+                    if (pl.folderName) {
+                      setSelectedFolder(pl.folderName);
+                    }
+                    onLoadPlaylist(pl.id);
+                  }}
                   className="font-medium hover:text-sky-600 cursor-pointer"
                 >
                   {pl.name} ({pl.trackIds.length} bài)
@@ -254,7 +392,7 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
             : 'border-slate-200 bg-slate-50/70 text-slate-500'
         }`}
       >
-        Kéo thả cả thư mục hoặc nhiều tệp nhạc (MP3, FLAC, WAV, M4A, OGG) vào đây để tự động trích xuất ảnh cover và lưu vào trình duyệt.
+        Kéo thả cả thư mục hoặc nhiều tệp nhạc (MP3, FLAC, WAV, M4A, OGG) vào đây để quét tức thì theo thư mục và lưu vào máy.
       </div>
 
       {decodeError && (
@@ -271,7 +409,7 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Tìm tên bài hát hoặc định dạng..."
+            placeholder="Tìm tên bài hát, thư mục hoặc định dạng..."
             className="w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-sky-600 focus:bg-white focus:outline-none"
           />
         </div>
@@ -303,11 +441,12 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
       <div className="divide-y divide-slate-100 max-h-[420px] overflow-y-auto pr-1">
         {filteredTracks.length === 0 ? (
           <div className="py-8 text-center text-xs text-slate-500">
-            Không có bài hát nào khớp với định dạng {formatFilter}.
+            Không có bài hát nào khớp với bộ lọc hiện tại.
           </div>
         ) : (
           filteredTracks.map((track, idx) => {
             const isActive = track.id === activeTrackId;
+            const coverFailed = brokenCovers[track.id];
             return (
               <div
                 key={track.id}
@@ -321,12 +460,21 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
                   className="flex flex-1 items-center gap-3 min-w-0 text-left cursor-pointer"
                 >
                   <div className="relative h-11 w-11 rounded-md border border-slate-200 bg-slate-100 overflow-hidden shrink-0">
-                    <img
-                      src={track.coverUrl}
-                      alt={`Ảnh bìa ${track.title}`}
-                      referrerPolicy="no-referrer"
-                      className="h-full w-full object-cover"
-                    />
+                    {!coverFailed && track.coverUrl ? (
+                      <img
+                        src={track.coverUrl}
+                        alt={`Ảnh bìa ${track.title}`}
+                        referrerPolicy="no-referrer"
+                        onError={() =>
+                          setBrokenCovers((prev) => ({ ...prev, [track.id]: true }))
+                        }
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-400">
+                        <Disc3 className="h-5 w-5" />
+                      </div>
+                    )}
                     <div
                       className={`absolute inset-0 flex items-center justify-center transition-opacity ${
                         isActive
@@ -353,14 +501,14 @@ export const TrackLibrary: FC<TrackLibraryProps> = ({
                     <div className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500 truncate">
                       <span>{track.formatCategory}</span>
                       <span aria-hidden="true">·</span>
-                      <span className="truncate">{track.artistOrSource}</span>
+                      <span className="truncate">{track.folderName}</span>
                     </div>
                   </div>
                 </button>
 
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="font-mono text-xs text-slate-500 tabular-nums">
-                    {formatDuration(track.durationSec)}
+                    {track.durationSec > 0 ? formatDuration(track.durationSec) : 'Sẵn sàng'}
                   </span>
                   {!track.isBuiltIn && (
                     <button

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { DeviceMatrix } from './components/DeviceMatrix';
+import { MusicTvView } from './components/MusicTvView';
 import { PairingModal } from './components/PairingModal';
 import { ReceiverView } from './components/ReceiverView';
 import { ReleaseSection } from './components/ReleaseSection';
@@ -29,6 +30,7 @@ function HostDashboard({
 }) {
   const [activeTab, setActiveTab] = useState<ConsoleTab>('console');
   const [pairingOpen, setPairingOpen] = useState(false);
+  const [tvMode, setTvMode] = useState(false);
 
   const host = useHostStreamer(roomId);
 
@@ -38,6 +40,55 @@ function HostDashboard({
     url.searchParams.delete('role');
     window.history.replaceState({}, '', url.toString());
   }, [roomId]);
+
+  if (tvMode) {
+    return (
+      <>
+        <MusicTvView
+          roomId={roomId}
+          tracks={host.tracks}
+          activeTrack={host.activeTrack}
+          savedPlaylists={host.savedPlaylists}
+          isPlaying={host.isPlaying}
+          isScanning={host.isScanning}
+          isDecodingTrack={host.isDecodingTrack}
+          scanProgress={host.scanProgress}
+          loopTrack={host.loopTrack}
+          onToggleLoop={() => host.setLoopTrack((v) => !v)}
+          shuffle={host.shuffle}
+          onToggleShuffle={() => host.setShuffle((v) => !v)}
+          currentPositionSec={host.currentPositionSec}
+          receiverCount={host.receivers.length}
+          wsConnected={host.wsConnected}
+          localMonitorEnabled={host.localMonitorEnabled}
+          onToggleLocalMonitor={() => host.setLocalMonitorEnabled((v) => !v)}
+          localMonitorVolume={host.localMonitorVolume}
+          onChangeLocalMonitorVolume={host.setLocalMonitorVolume}
+          spectrumBands={host.spectrumBands}
+          onPlay={() => host.startPlayback()}
+          onPause={host.pausePlayback}
+          onNext={host.nextTrack}
+          onPrevious={host.previousTrack}
+          onSeek={host.seekTo}
+          onSelectTrack={host.selectTrack}
+          onLoadFiles={host.loadLocalAudioFiles}
+          onScanDirectoryFast={host.scanDirectoryFast}
+          onSavePlaylist={host.saveCurrentPlaylist}
+          onLoadPlaylist={host.loadPlaylist}
+          onDeletePlaylist={host.deletePlaylist}
+          onOpenPairing={() => setPairingOpen(true)}
+          onExitTvMode={() => setTvMode(false)}
+        />
+        <PairingModal
+          open={pairingOpen}
+          onClose={() => setPairingOpen(false)}
+          roomId={roomId}
+          onChangeRoomId={onChangeRoomId}
+          onSwitchToReceiver={onSwitchToStandaloneReceiver}
+        />
+      </>
+    );
+  }
 
   if (activeTab === 'receiver') {
     return (
@@ -80,6 +131,7 @@ function HostDashboard({
             <TransportConsole
               activeTrack={host.activeTrack}
               isPlaying={host.isPlaying}
+              isDecodingTrack={host.isDecodingTrack}
               loopTrack={host.loopTrack}
               onToggleLoop={() => host.setLoopTrack((v) => !v)}
               shuffle={host.shuffle}
@@ -95,6 +147,8 @@ function HostDashboard({
               onToggleLocalMonitor={() => host.setLocalMonitorEnabled((v) => !v)}
               localMonitorVolume={host.localMonitorVolume}
               onChangeLocalMonitorVolume={host.setLocalMonitorVolume}
+              tvMode={tvMode}
+              onToggleTvMode={() => setTvMode(true)}
               onPlay={() => host.startPlayback()}
               onPause={host.pausePlayback}
               onStop={host.stopAndRewind}

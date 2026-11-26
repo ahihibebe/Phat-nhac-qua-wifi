@@ -1,11 +1,17 @@
 package com.musictoblutooth
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
+import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -16,7 +22,11 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewAssetLoader
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
@@ -42,6 +52,19 @@ class MainActivity : AppCompatActivity() {
         filePathCallback = null
     }
 
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            webView.post {
+                webView.evaluateJavascript(
+                    "window.dispatchEvent(new CustomEvent('mtb-media-permission-granted'));",
+                    null
+                )
+            }
+        }
+    }
+
     inner class AndroidBridge(
         private val lanOrigin: String,
         private val wsUrl: String,
@@ -58,6 +81,140 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun getRole(): String = role
+
+        @JavascriptInterface
+        fun scanDeviceMusic(): String {
+            val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                Manifest.permission.READ_MEDIA_AUDIO
+            } else {
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            }
+
+            if (ContextCompat.checkSelfPermission(this@MainActivity, permission) != PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread {
+                    audioPermissionLauncher.launch(permission)
+                }
+                return JSONObject().put("needsPermission", true).put("tracks", JSONArray()).toString()
+            }
+
+            val tracks = queryDeviceAudioMediaStore()
+            return JSONObject().put("needsPermission", false).put("tracks", tracks).toString()
+        }
+    }
+
+    private fun queryDeviceAudioMediaStore(): JSONArray {
+        val result = JSONArray()
+        val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            MediaStore.Audio.Media._ID,
+            MediaStore.Audio.Media.TITLE,
+            MediaStore.Audio.Media.ARTIST,
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.SIZE,
+            MediaStore.Audio.Media.DISPLAY_NAME,
+            MediaStore.Audio.Media.DATA,
+            MediaStore.Audio.Media.ALBUM_ID
+        )
+        val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 OR ${MediaStore.Audio.Media.DURATION} > 5000"
+        val sortOrder = "${MediaStore.Audio.Media.DATE_ADDED} DESC"
+        val albumArtCache = HashMap<Long, String>()
+
+        try {
+            contentResolver.query(collection, projection, selection, null, sortOrder)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+                val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+                val durCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+                val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+                val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+                val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+                val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+
+                var count = 0
+                while (cursor.moveToNext() && count < 400) {
+                    val id = cursor.getLong(idCol)
+                    val displayName = cursor.getString(nameCol) ?: "track_$id.mp3"
+                    val ext = displayName.substringAfterLast('.', "").lowercase()
+                    if (ext !in listOf("mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "webm")) {
+                        continue
+                    }
+
+                    val title = cursor.getString(titleCol)?.takeIf { it.isNotBlank() }
+                        ?: displayName.substringBeforeLast('.')
+                    val artist = cursor.getString(artistCol)?.takeIf { it.isNotBlank() && it != "<unknown>" }
+                        ?: "Nhạc trên thiết bị"
+                    val durationSec = (cursor.getLong(durCol) / 1000.0).coerceAtLeast(1.0)
+                    val sizeBytes = cursor.getLong(sizeCol)
+                    val filePath = cursor.getString(dataCol) ?: ""
+                    val folderName = extractParentFolderName(filePath)
+                    val albumId = cursor.getLong(albumIdCol)
+
+                    val coverUrl = albumArtCache.getOrPut(albumId) {
+                        loadAlbumArtDataUrl(albumId)
+                    }
+
+                    val formatCategory = when (ext) {
+                        "mp3" -> "MP3"
+                        "flac" -> "FLAC"
+                        "wav" -> "WAV"
+                        "m4a", "aac" -> "M4A"
+                        "ogg", "opus" -> "OGG"
+                        else -> "KHÁC"
+                    }
+
+                    result.put(JSONObject().apply {
+                        put("id", "media-$id")
+                        put("title", title)
+                        put("artist", artist)
+                        put("folderName", folderName)
+                        put("formatCategory", formatCategory)
+                        put("durationSec", durationSec)
+                        put("fileSizeBytes", sizeBytes)
+                        put("localMediaUrl", "https://appassets.androidplatform.net/local-media/$id")
+                        put("coverUrl", coverUrl)
+                    })
+                    count++
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return result
+    }
+
+    private fun extractParentFolderName(fullPath: String): String {
+        if (fullPath.isBlank()) return "Nhạc trên máy"
+        val normalized = fullPath.replace('\\', '/')
+        val lastSlash = normalized.lastIndexOf('/')
+        if (lastSlash <= 0) return "Nhạc trên máy"
+        val parentPath = normalized.substring(0, lastSlash)
+        val parentName = parentPath.substringAfterLast('/')
+        return parentName.ifBlank { "Nhạc trên máy" }
+    }
+
+    private fun loadAlbumArtDataUrl(albumId: Long): String {
+        if (albumId <= 0) return ""
+        return try {
+            val artUri = ContentUris.withAppendedId(
+                Uri.parse("content://media/external/audio/albumart"),
+                albumId
+            )
+            contentResolver.openInputStream(artUri)?.use { stream ->
+                val buffer = ByteArrayOutputStream()
+                val chunk = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    val read = stream.read(chunk)
+                    if (read == -1) break
+                    total += read
+                    if (total > 260_000) break
+                    buffer.write(chunk, 0, read)
+                }
+                val b64 = Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP)
+                "data:image/jpeg;base64,$b64"
+            } ?: ""
+        } catch (_: Exception) {
+            ""
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -80,6 +237,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         val assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/local-media/") { path ->
+                val mediaId = path.trimStart('/').toLongOrNull() ?: return@addPathHandler null
+                try {
+                    val uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, mediaId)
+                    val mime = contentResolver.getType(uri) ?: "audio/mpeg"
+                    val stream = contentResolver.openInputStream(uri) ?: return@addPathHandler null
+                    WebResourceResponse(mime, null, stream)
+                } catch (_: Exception) {
+                    null
+                }
+            }
             .addPathHandler("/") { path ->
                 val cleanPath = if (path.isEmpty() || path == "/") "index.html" else path.trimStart('/')
                 try {

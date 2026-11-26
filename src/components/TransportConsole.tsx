@@ -1,6 +1,7 @@
-import { useState, type FC } from 'react';
+import { useEffect, useState, type FC } from 'react';
 import {
   Disc3,
+  Loader2,
   Pause,
   Play,
   Repeat,
@@ -8,6 +9,7 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Tv,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -17,6 +19,7 @@ import { TortoiseProgressBar } from './TortoiseProgressBar';
 interface TransportConsoleProps {
   activeTrack: DecodedTrack | null;
   isPlaying: boolean;
+  isDecodingTrack?: boolean;
   loopTrack: boolean;
   onToggleLoop: () => void;
   shuffle: boolean;
@@ -32,6 +35,8 @@ interface TransportConsoleProps {
   onToggleLocalMonitor: () => void;
   localMonitorVolume: number;
   onChangeLocalMonitorVolume: (val: number) => void;
+  tvMode?: boolean;
+  onToggleTvMode?: () => void;
   onPlay: () => void;
   onPause: () => void;
   onStop: () => void;
@@ -46,6 +51,7 @@ interface TransportConsoleProps {
 export const TransportConsole: FC<TransportConsoleProps> = ({
   activeTrack,
   isPlaying,
+  isDecodingTrack = false,
   loopTrack,
   onToggleLoop,
   shuffle,
@@ -61,6 +67,8 @@ export const TransportConsole: FC<TransportConsoleProps> = ({
   onToggleLocalMonitor,
   localMonitorVolume,
   onChangeLocalMonitorVolume,
+  tvMode = false,
+  onToggleTvMode,
   onPlay,
   onPause,
   onStop,
@@ -74,6 +82,10 @@ export const TransportConsole: FC<TransportConsoleProps> = ({
   const duration = activeTrack?.durationSec || 0;
   const peaks = activeTrack?.peaks || [];
   const coverUrl = activeTrack?.coverUrl;
+
+  useEffect(() => {
+    setImgError(false);
+  }, [activeTrack?.id, coverUrl]);
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-6">
@@ -106,13 +118,22 @@ export const TransportConsole: FC<TransportConsoleProps> = ({
               <span className="font-mono tabular-nums">{settings.sampleRate / 1000} kHz 16-bit PCM</span>
               <span aria-hidden="true">·</span>
               <span className="font-mono tabular-nums">{settings.frameDurationMs} ms/gói</span>
+              {isDecodingTrack && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="inline-flex items-center gap-1 text-sky-600 font-medium">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Đang nạp âm thanh...
+                  </span>
+                </>
+              )}
             </div>
             <h1 className="mt-1.5 font-display text-xl sm:text-2xl font-bold text-slate-900 truncate">
               {activeTrack ? activeTrack.title : 'Chưa có bài nhạc'}
             </h1>
             <p className="mt-0.5 text-xs text-slate-500 truncate">
               {activeTrack
-                ? `${activeTrack.artistOrSource} · ${activeTrack.formatLabel}`
+                ? `${activeTrack.folderName} · ${activeTrack.formatLabel}`
                 : 'Quét thư mục hoặc chọn tệp nhạc để bắt đầu phát đa loa'}
             </p>
           </div>
@@ -237,6 +258,22 @@ export const TransportConsole: FC<TransportConsoleProps> = ({
             <Repeat className="h-3.5 w-3.5" />
             Lặp bài
           </button>
+
+          {onToggleTvMode && (
+            <button
+              type="button"
+              onClick={onToggleTvMode}
+              aria-pressed={tvMode}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                tvMode
+                  ? 'border-sky-600 bg-sky-600 text-white'
+                  : 'border-slate-300 bg-slate-50 text-slate-800 hover:bg-slate-100'
+              }`}
+            >
+              <Tv className="h-3.5 w-3.5" />
+              Chế độ Music TV
+            </button>
+          )}
         </div>
 
         {/* Real-time 32-band PCM Energy Monitor */}
