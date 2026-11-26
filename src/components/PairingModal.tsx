@@ -1,6 +1,7 @@
 import { useEffect, useState, type FC } from 'react';
 import { Check, Copy, ExternalLink, Smartphone, Wifi, X } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { getApiBaseUrl, getAppBaseOrigin } from '../utils/wsEndpoint';
 
 interface PairingModalProps {
   open: boolean;
@@ -34,7 +35,7 @@ export const PairingModal: FC<PairingModalProps> = ({
 
   useEffect(() => {
     if (!open) return;
-    fetch('/api/network-info')
+    fetch(`${getApiBaseUrl()}/api/network-info`)
       .then((res) => res.json())
       .then((data: NetworkInfo) => setNetworkInfo(data))
       .catch(() => {});
@@ -42,7 +43,8 @@ export const PairingModal: FC<PairingModalProps> = ({
 
   if (!open) return null;
 
-  const receiverUrl = `${window.location.origin}/?role=receiver&room=${encodeURIComponent(roomId)}`;
+  const baseOrigin = getAppBaseOrigin() || window.location.origin;
+  const receiverUrl = `${baseOrigin}/?role=receiver&room=${encodeURIComponent(roomId)}`;
 
   const handleCopy = async (text: string) => {
     try {

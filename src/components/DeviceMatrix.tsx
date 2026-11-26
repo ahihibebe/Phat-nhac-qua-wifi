@@ -10,6 +10,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import type { ChannelRouting, ReceiverDevice } from '../types/audio';
+import { getAppBaseOrigin } from '../utils/wsEndpoint';
 
 interface DeviceMatrixProps {
   receivers: ReceiverDevice[];
@@ -43,7 +44,8 @@ export const DeviceMatrix: FC<DeviceMatrixProps> = ({
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'ready' | 'muted'>('all');
 
-  const receiverUrl = `${window.location.origin}/?role=receiver&room=${encodeURIComponent(roomId)}`;
+  const baseOrigin = getAppBaseOrigin() || window.location.origin;
+  const receiverUrl = `${baseOrigin}/?role=receiver&room=${encodeURIComponent(roomId)}`;
 
   const filtered = receivers.filter((dev) => {
     const q = search.trim().toLowerCase();

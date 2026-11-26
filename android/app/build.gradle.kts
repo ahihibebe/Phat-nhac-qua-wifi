@@ -12,10 +12,6 @@ android {
         targetSdk = 34
         versionCode = 100
         versionName = "1.0.0"
-
-        val serverUrl = (project.findProperty("MTB_SERVER_URL") as String?)
-            ?: "https://ais-pre-2jiqjqpwnn2ipdiouf2thr-63285293710.asia-east1.run.app"
-        buildConfigField("String", "SERVER_URL", "\"$serverUrl\"")
     }
 
     buildFeatures {
@@ -40,7 +36,6 @@ android {
 
     signingConfigs {
         getByName("debug") {
-            // Ky so nhanh ban Release APK cai dat truc tiep tren Android
         }
     }
 
@@ -65,7 +60,6 @@ android {
     }
 }
 
-// Khac phuc triet de loi checkReleaseDuplicateClasses giua kotlin-stdlib va kotlin-stdlib-jdk8
 configurations.all {
     resolutionStrategy {
         force("org.jetbrains.kotlin:kotlin-stdlib:1.9.24")
@@ -81,4 +75,5 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-ktx:1.9.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.webkit:webkit:1.11.0")
 }

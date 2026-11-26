@@ -381,6 +381,18 @@ async function startServer() {
       content: fs.readFileSync(item.absPath),
     }));
 
+    const distDir = path.join(__dirname, 'dist');
+    if (fs.existsSync(distDir)) {
+      const distCollected: { zipPath: string; absPath: string }[] = [];
+      collectFilesRecursive(distDir, distDir, distCollected);
+      for (const item of distCollected) {
+        files.push({
+          zipPath: `android/app/src/main/assets/www/${item.zipPath}`,
+          content: fs.readFileSync(item.absPath),
+        });
+      }
+    }
+
     const zipBuf = createZipBuffer(files);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="MusicToBlutooth-Android-DualAPK.zip"');

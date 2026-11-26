@@ -1,6 +1,7 @@
-import { useState, type FC } from 'react';
-import { ArrowLeft, Bluetooth, CheckCircle2, Disc3, Radio, Volume2, VolumeX } from 'lucide-react';
+import { useEffect, useState, type FC } from 'react';
+import { ArrowLeft, Bluetooth, CheckCircle2, Disc3, Radio, Volume2, VolumeX, Wifi } from 'lucide-react';
 import { useReceiverClient } from '../hooks/useReceiverClient';
+import { getSavedServerOrigin, isRunningInAndroidApk, saveServerOrigin } from '../utils/wsEndpoint';
 
 interface ReceiverViewProps {
   roomId: string;
@@ -23,6 +24,21 @@ export const ReceiverView: FC<ReceiverViewProps> = ({
   });
   const [speakerLabel, setSpeakerLabel] = useState('Loa Bluetooth Phòng Khách');
   const [roomDraft, setRoomDraft] = useState(roomId);
+  const [serverOrigin, setServerOrigin] = useState(() => getSavedServerOrigin());
+  const [serverInput, setServerInput] = useState(() => getSavedServerOrigin());
+  const inApk = isRunningInAndroidApk();
+
+  useEffect(() => {
+    if (!inApk || serverOrigin) return;
+    const timer = window.setInterval(() => {
+      const discovered = window.__MTB_ANDROID__?.getDiscoveredHost?.() || '';
+      if (discovered) {
+        setServerOrigin(discovered);
+        setServerInput(discovered);
+      }
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [inApk, serverOrigin]);
 
   const {
     wsConnected,
@@ -41,7 +57,7 @@ export const ReceiverView: FC<ReceiverViewProps> = ({
     enableAudio,
     selectAudioOutput,
     updateSelf,
-  } = useReceiverClient(roomId, deviceName, speakerLabel);
+  } = useReceiverClient(roomId, deviceName, speakerLabel, serverOrigin || undefined);
 
   const meterLevel = Math.max(0, Math.min(100, ((signalDb + 60) / 60) * 100));
 
@@ -325,6 +341,37 @@ export const ReceiverView: FC<ReceiverViewProps> = ({
           >
             Vào phòng
           </button>
+        </form>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const val = serverInput.trim();
+            saveServerOrigin(val);
+            setServerOrigin(val);
+          }}
+          className="border-t border-slate-200 pt-4 space-y-2"
+        >
+          <label htmlFor="rec-host-ip" className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
+            <Wifi className="h-3.5 w-3.5 text-sky-600" />
+            <span>Địa chỉ Máy chủ / Điện thoại Truyền Wi-Fi (tự dò hoặc nhập IP)</span>
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="rec-host-ip"
+              type="text"
+              value={serverInput}
+              onChange={(e) => setServerInput(e.target.value)}
+              placeholder="vd: http://192.168.1.15:8765"
+              className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 focus:border-sky-600 focus:outline-none"
+            />
+            <button
+              type="submit"
+              className="rounded-lg border border-slate-300 bg-slate-100 hover:bg-slate-200 px-3.5 py-2 text-xs font-medium text-slate-800 cursor-pointer"
+            >
+              Kết nối
+            </button>
+          </div>
         </form>
       </section>
     </div>

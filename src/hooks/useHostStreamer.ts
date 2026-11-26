@@ -19,6 +19,7 @@ import {
   saveAudioFileRecord,
 } from '../utils/playlistStorage';
 import { buildBuiltInTracks } from '../utils/synthTracks';
+import { getWebSocketUrl } from '../utils/wsEndpoint';
 
 interface HostMetrics {
   packetsSent: number;
@@ -201,8 +202,7 @@ export function useHostStreamer(roomId: string) {
     let pingTimer: number | null = null;
 
     const connect = () => {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      const ws = new WebSocket(getWebSocketUrl());
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
 

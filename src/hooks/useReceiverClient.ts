@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ClientMessage, ReceiverDevice, RoomSettings, ServerMessage } from '../types/audio';
 import { decodePcmPacket } from '../utils/pcmPacketizer';
+import { getWebSocketUrl } from '../utils/wsEndpoint';
 
 export interface AudioOutputOption {
   deviceId: string;
   label: string;
 }
 
-export function useReceiverClient(roomId: string, initialName: string, initialSpeaker: string) {
+export function useReceiverClient(
+  roomId: string,
+  initialName: string,
+  initialSpeaker: string,
+  serverOriginOverride?: string
+) {
   const [wsConnected, setWsConnected] = useState(false);
   const [hostConnected, setHostConnected] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
@@ -129,8 +135,7 @@ export function useReceiverClient(roomId: string, initialName: string, initialSp
     let telemetryTimer: number | null = null;
 
     const connect = () => {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      const ws = new WebSocket(getWebSocketUrl(serverOriginOverride));
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
 
@@ -307,7 +312,7 @@ export function useReceiverClient(roomId: string, initialName: string, initialSp
       audioCtxRef.current?.close().catch(() => {});
       audioCtxRef.current = null;
     };
-  }, [initialName, initialSpeaker, roomId, sendControl]);
+  }, [initialName, initialSpeaker, roomId, sendControl, serverOriginOverride]);
 
   const updateSelf = useCallback(
     (patch: {
