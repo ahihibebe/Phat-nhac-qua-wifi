@@ -5,6 +5,7 @@ import {
   ExternalLink,
   QrCode,
   Search,
+  Sparkles,
   Trash2,
   Volume2,
   VolumeX,
@@ -15,6 +16,7 @@ import { getAppBaseOrigin } from '../utils/wsEndpoint';
 interface DeviceMatrixProps {
   receivers: ReceiverDevice[];
   roomId: string;
+  isAutoCalibrating?: boolean;
   onUpdateDevice: (
     receiverId: string,
     patch: Partial<
@@ -24,6 +26,7 @@ interface DeviceMatrixProps {
   onSendTestTone: (receiverId: string) => void;
   onKickDevice: (receiverId: string) => void;
   onOpenPairing: () => void;
+  onAutoCalibrate?: (receiverId?: string) => void;
 }
 
 const CHANNEL_OPTIONS: { value: ChannelRouting; label: string }[] = [
@@ -36,10 +39,12 @@ const CHANNEL_OPTIONS: { value: ChannelRouting; label: string }[] = [
 export const DeviceMatrix: FC<DeviceMatrixProps> = ({
   receivers,
   roomId,
+  isAutoCalibrating = false,
   onUpdateDevice,
   onSendTestTone,
   onKickDevice,
   onOpenPairing,
+  onAutoCalibrate,
 }) => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'ready' | 'muted'>('all');
@@ -74,6 +79,17 @@ export const DeviceMatrix: FC<DeviceMatrixProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onAutoCalibrate && receivers.length > 0 && (
+            <button
+              type="button"
+              onClick={() => onAutoCalibrate()}
+              disabled={isAutoCalibrating}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 hover:bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+            >
+              <Sparkles className={`h-3.5 w-3.5 ${isAutoCalibrating ? 'animate-spin' : ''}`} />
+              {isAutoCalibrating ? 'Đang tự bù...' : 'Auto bù trễ'}
+            </button>
+          )}
           <button
             type="button"
             onClick={onOpenPairing}
@@ -260,6 +276,18 @@ export const DeviceMatrix: FC<DeviceMatrixProps> = ({
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-slate-500">Bù trễ Bluetooth</span>
                       <div className="flex items-center gap-1.5">
+                        {onAutoCalibrate && (
+                          <button
+                            type="button"
+                            onClick={() => onAutoCalibrate(dev.id)}
+                            disabled={isAutoCalibrating}
+                            title="Tự động cân chỉnh bù trễ cho loa này"
+                            className="inline-flex items-center gap-1 rounded border border-sky-200 bg-sky-50 hover:bg-sky-100 px-1.5 py-0.5 text-[11px] font-semibold text-sky-700 cursor-pointer disabled:opacity-50"
+                          >
+                            <Sparkles className="h-2.5 w-2.5" />
+                            Auto
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() =>

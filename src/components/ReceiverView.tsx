@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState, type FC } from 'react';
-import { ArrowLeft, Bluetooth, CheckCircle2, Disc3, Radio, RefreshCw, Volume2, VolumeX, Wifi } from 'lucide-react';
+import {
+  ArrowLeft,
+  Bluetooth,
+  CheckCircle2,
+  Disc3,
+  Radio,
+  RefreshCw,
+  Sparkles,
+  Volume2,
+  VolumeX,
+  Wifi,
+} from 'lucide-react';
 import { useReceiverClient } from '../hooks/useReceiverClient';
 import {
   detectBluetoothSpeakerLabel,
@@ -57,9 +68,12 @@ export const ReceiverView: FC<ReceiverViewProps> = ({
     outputDevices,
     selectedOutputId,
     sinkSupported,
+    isAutoCalibrating,
+    autoCalibNote,
     enableAudio,
     selectAudioOutput,
     updateSelf,
+    autoCalibrateDelay,
   } = useReceiverClient(roomId, deviceName, speakerLabel, serverOrigin || undefined);
 
   useEffect(() => {
@@ -287,14 +301,25 @@ export const ReceiverView: FC<ReceiverViewProps> = ({
         </div>
 
         <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="text-slate-700">Bù trễ loa Bluetooth (đồng bộ nhiều máy)</span>
-            <span className="font-mono font-semibold text-sky-600 tabular-nums">
-              {(deviceConfig?.delayOffsetMs ?? 0) > 0
-                ? `+${deviceConfig?.delayOffsetMs}`
-                : deviceConfig?.delayOffsetMs ?? 0}{' '}
-              ms
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={autoCalibrateDelay}
+                disabled={isAutoCalibrating}
+                className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 hover:bg-sky-100 px-2.5 py-1 text-[11px] font-semibold text-sky-700 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <Sparkles className={`h-3 w-3 ${isAutoCalibrating ? 'animate-spin' : ''}`} />
+                {isAutoCalibrating ? 'Đang đo...' : 'Auto bù trễ'}
+              </button>
+              <span className="font-mono font-semibold text-sky-600 tabular-nums">
+                {(deviceConfig?.delayOffsetMs ?? 0) > 0
+                  ? `+${deviceConfig?.delayOffsetMs}`
+                  : deviceConfig?.delayOffsetMs ?? 0}{' '}
+                ms
+              </span>
+            </div>
           </div>
           <input
             type="range"
@@ -305,6 +330,9 @@ export const ReceiverView: FC<ReceiverViewProps> = ({
             onChange={(e) => updateSelf({ delayOffsetMs: Number(e.target.value) })}
             className="studio-slider w-full"
           />
+          {autoCalibNote && (
+            <p className="text-[11px] text-emerald-700 font-medium">{autoCalibNote}</p>
+          )}
         </div>
       </section>
 

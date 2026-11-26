@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   AudioFormatCategory,
+  ChannelRouting,
   ClientMessage,
   DecodedTrack,
   FrameDurationMs,
@@ -63,6 +64,8 @@ export function useHostStreamer(roomId: string) {
   const [savedPlaylists, setSavedPlaylists] = useState<SavedPlaylist[]>(() => loadSavedPlaylists());
   const [isScanning, setIsScanning] = useState(false);
   const [isDecodingTrack, setIsDecodingTrack] = useState(false);
+  const [isAutoCalibrating, setIsAutoCalibrating] = useState(false);
+  const [autoCalibNote, setAutoCalibNote] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number } | null>(null);
   const [decodeError, setDecodeError] = useState<string | null>(null);
 
@@ -72,6 +75,17 @@ export function useHostStreamer(roomId: string) {
   const [currentPositionSec, setCurrentPositionSec] = useState(0);
   const [localMonitorEnabled, setLocalMonitorEnabled] = useState(true);
   const [localMonitorVolume, setLocalMonitorVolume] = useState(0.75);
+  const [hostChannelMode, setHostChannelModeState] = useState<ChannelRouting>(() => {
+    try {
+      const saved = localStorage.getItem('mtb_host_channel_mode');
+      if (saved === 'stereo' || saved === 'left' || saved === 'right' || saved === 'mono') {
+        return saved;
+      }
+    } catch {
+      // ignore storage error
+    }
+    return 'stereo';
+  });
   const [spectrumBands, setSpectrumBands] = useState<number[]>(() => new Array(32).fill(0));
   const [metrics, setMetrics] = useState<HostMetrics>({
     packetsSent: 0,
@@ -81,18 +95,28 @@ export function useHostStreamer(roomId: string) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const monitorInputGainRef = useRef<GainNode | null>(null);
   const monitorGainRef = useRef<GainNode | null>(null);
   const monitorSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const monitorMatrixRef = useRef<{
+    gLL: GainNode;
+    gLR: GainNode;
+    gRL: GainNode;
+    gRR: GainNode;
+  } | null>(null);
 
   const serverOffsetMsRef = useRef<number>(0);
+  const pingSamplesRef = useRef<{ rtt: number; offset: number }[]>([]);
   const isPlayingRef = useRef(false);
   const loopTrackRef = useRef(false);
   const shuffleRef = useRef(false);
   const tracksRef = useRef<DecodedTrack[]>([]);
+  const receiversRef = useRef<ReceiverDevice[]>([]);
   const activeTrackRef = useRef<DecodedTrack | null>(null);
   const settingsRef = useRef(settings);
   const localMonitorEnabledRef = useRef(localMonitorEnabled);
   const localMonitorVolumeRef = useRef(localMonitorVolume);
+  const hostChannelModeRef = useRef<ChannelRouting>(hostChannelMode);
 
   const sampleCursorRef = useRef(0);
   const seqRef = useRef(1);
@@ -172,6 +196,60 @@ export function useHostStreamer(roomId: string) {
     }
   }, []);
 
+  const applyMonitorChannelMatrix = useCallback((mode: ChannelRouting, smooth = true) => {
+    const matrix = monitorMatrixRef.current;
+    const ctx = audioCtxRef.current;
+    if (!matrix || !ctx) return;
+
+    let ll = 1;
+    let lr = 0;
+    let rl = 0;
+    let rr = 1;
+    if (mode === 'left') {
+      ll = 1;
+      lr = 1;
+      rl = 0;
+      rr = 0;
+    } else if (mode === 'right') {
+      ll = 0;
+      lr = 0;
+      rl = 1;
+      rr = 1;
+    } else if (mode === 'mono') {
+      ll = 0.5;
+      lr = 0.5;
+      rl = 0.5;
+      rr = 0.5;
+    }
+
+    if (smooth) {
+      const now = ctx.currentTime;
+      matrix.gLL.gain.setTargetAtTime(ll, now, 0.015);
+      matrix.gLR.gain.setTargetAtTime(lr, now, 0.015);
+      matrix.gRL.gain.setTargetAtTime(rl, now, 0.015);
+      matrix.gRR.gain.setTargetAtTime(rr, now, 0.015);
+    } else {
+      matrix.gLL.gain.value = ll;
+      matrix.gLR.gain.value = lr;
+      matrix.gRL.gain.value = rl;
+      matrix.gRR.gain.value = rr;
+    }
+  }, []);
+
+  const setHostChannelMode = useCallback(
+    (mode: ChannelRouting) => {
+      setHostChannelModeState(mode);
+      hostChannelModeRef.current = mode;
+      try {
+        localStorage.setItem('mtb_host_channel_mode', mode);
+      } catch {
+        // ignore storage error
+      }
+      applyMonitorChannelMatrix(mode, true);
+    },
+    [applyMonitorChannelMatrix]
+  );
+
   const ensureAudioContext = useCallback((sampleRate: SampleRateOption) => {
     if (!audioCtxRef.current || audioCtxRef.current.sampleRate !== sampleRate) {
       stopMonitorSource();
@@ -179,30 +257,58 @@ export function useHostStreamer(roomId: string) {
         audioCtxRef.current.close().catch(() => {});
       }
       const ctx = new AudioContext({ sampleRate });
+      const inputGain = ctx.createGain();
+      inputGain.channelCount = 2;
+      inputGain.channelCountMode = 'explicit';
+      inputGain.channelInterpretation = 'speakers';
+
+      const splitter = ctx.createChannelSplitter(2);
+      const gLL = ctx.createGain();
+      const gLR = ctx.createGain();
+      const gRL = ctx.createGain();
+      const gRR = ctx.createGain();
+      const merger = ctx.createChannelMerger(2);
       const gain = ctx.createGain();
       gain.gain.value = localMonitorEnabledRef.current ? localMonitorVolumeRef.current : 0;
+
+      inputGain.connect(splitter);
+      splitter.connect(gLL, 0);
+      splitter.connect(gLR, 0);
+      splitter.connect(gRL, 1);
+      splitter.connect(gRR, 1);
+
+      gLL.connect(merger, 0, 0);
+      gRL.connect(merger, 0, 0);
+      gLR.connect(merger, 0, 1);
+      gRR.connect(merger, 0, 1);
+
+      merger.connect(gain);
       gain.connect(ctx.destination);
+
       audioCtxRef.current = ctx;
+      monitorInputGainRef.current = inputGain;
       monitorGainRef.current = gain;
+      monitorMatrixRef.current = { gLL, gLR, gRL, gRR };
+      applyMonitorChannelMatrix(hostChannelModeRef.current, false);
     }
     if (audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume().catch(() => {});
     }
     return audioCtxRef.current;
-  }, [stopMonitorSource]);
+  }, [applyMonitorChannelMatrix, stopMonitorSource]);
 
   const startContinuousMonitor = useCallback(
     (buffer: AudioBuffer, offsetSec: number, jitterMs: number) => {
       stopMonitorSource();
       if (!localMonitorEnabledRef.current) return;
       const ctx = ensureAudioContext(settingsRef.current.sampleRate);
-      const gain = monitorGainRef.current;
-      if (!ctx || !gain) return;
+      const inputNode = monitorInputGainRef.current || monitorGainRef.current;
+      if (!ctx || !inputNode) return;
 
       const src = ctx.createBufferSource();
       src.buffer = buffer;
       src.loop = loopTrackRef.current;
-      src.connect(gain);
+      src.connect(inputNode);
 
       const safeOffset = Math.max(0, Math.min(Math.max(0, buffer.duration - 0.05), offsetSec));
       const startAt = ctx.currentTime + jitterMs / 1000;
@@ -380,8 +486,16 @@ export function useHostStreamer(roomId: string) {
           const now = Date.now();
           const rtt = Math.max(0, now - msg.clientSendMs);
           const estimatedServerNow = msg.serverTimeMs + rtt / 2;
-          serverOffsetMsRef.current = estimatedServerNow - now;
+          const offset = estimatedServerNow - now;
+          pingSamplesRef.current.push({ rtt, offset });
+          if (pingSamplesRef.current.length > 16) {
+            pingSamplesRef.current.shift();
+          }
+          const recent = pingSamplesRef.current.slice(-6);
+          const best = recent.reduce((acc, s) => (s.rtt < acc.rtt ? s : acc), recent[0]);
+          serverOffsetMsRef.current = best.offset;
         } else if (msg.type === 'room:state') {
+          receiversRef.current = msg.receivers;
           setReceivers(msg.receivers);
         }
       };
@@ -486,6 +600,20 @@ export function useHostStreamer(roomId: string) {
 
       sampleCursorRef.current = cursor;
       latestPosSec = Math.min(track.durationSec || srcBuffer.duration, cursor / sampleRate);
+
+      // Apply host broadcast channel mode (stereo / left / right / mono)
+      const chMode = hostChannelModeRef.current;
+      if (chMode === 'left') {
+        right.set(left);
+      } else if (chMode === 'right') {
+        left.set(right);
+      } else if (chMode === 'mono') {
+        for (let i = 0; i < frameSamples; i++) {
+          const m = (left[i] + right[i]) * 0.5;
+          left[i] = m;
+          right[i] = m;
+        }
+      }
 
       const aheadMs = Math.max(0, nextTickPerfMsRef.current - nowPerf);
       const playAtServerMs = Date.now() + serverOffsetMsRef.current + aheadMs + jitterBufferMs;
@@ -1138,6 +1266,87 @@ export function useHostStreamer(roomId: string) {
     [sendControl]
   );
 
+  const autoCalibrateDelay = useCallback(
+    async (targetReceiverId?: string) => {
+      setIsAutoCalibrating(true);
+      setAutoCalibNote(null);
+      try {
+        // 5-ping NTP burst to measure host Wi-Fi RTT & jitter and discipline server clock
+        for (let i = 0; i < 5; i++) {
+          sendControl({ type: 'sync:ping', clientSendMs: Date.now() });
+          await new Promise((r) => setTimeout(r, 60));
+        }
+
+        const recent = pingSamplesRef.current.slice(-6);
+        const rtts = recent.map((s) => s.rtt).sort((a, b) => a - b);
+        const medianHostRtt = rtts.length > 0 ? rtts[Math.floor(rtts.length / 2)] : 4;
+        const hostJitterMs = rtts.length > 1 ? rtts[rtts.length - 1] - rtts[0] : 0;
+        if (recent.length > 0) {
+          const best = recent.reduce((acc, s) => (s.rtt < acc.rtt ? s : acc), recent[0]);
+          serverOffsetMsRef.current = best.offset;
+        }
+
+        const ctx = audioCtxRef.current as (AudioContext & { outputLatency?: number }) | null;
+        const measuredHostOutMs = ctx
+          ? ((ctx.outputLatency || 0) + (ctx.baseLatency || 0)) * 1000
+          : 0;
+        const hostBtName = window.__MTB_ANDROID__?.getBluetoothSpeakerName?.()?.trim() || '';
+        const hostOutDelayMs = localMonitorEnabledRef.current
+          ? measuredHostOutMs >= 25
+            ? Math.min(180, measuredHostOutMs)
+            : hostBtName
+              ? 120
+              : 0
+          : 0;
+
+        const allRecs = receiversRef.current;
+        const targetRecs = targetReceiverId
+          ? allRecs.filter((r) => r.id === targetReceiverId)
+          : allRecs;
+
+        const maxRecRtt = allRecs.reduce((m, r) => Math.max(m, r.rttMs || 0), 0);
+        const hasDrops = allRecs.some((r) => (r.packetsDropped || 0) > 0);
+
+        let nextJitterMs = settingsRef.current.jitterBufferMs;
+        if (!targetReceiverId) {
+          const idealJitter = 60 + Math.max(hostJitterMs, medianHostRtt, maxRecRtt) * 1.4 + (hasDrops ? 30 : 0);
+          nextJitterMs = Math.max(40, Math.min(220, Math.round(idealJitter / 10) * 10));
+          updateStreamSettings({ jitterBufferMs: nextJitterMs });
+
+          if (isPlayingRef.current && activeTrackRef.current?.buffer && localMonitorEnabledRef.current) {
+            const posSec = sampleCursorRef.current / settingsRef.current.sampleRate;
+            startContinuousMonitor(activeTrackRef.current.buffer, posSec, nextJitterMs);
+          }
+        }
+
+        for (const rec of targetRecs) {
+          const labelCombined = `${rec.speakerLabel} ${rec.outputDeviceLabel}`.toLowerCase();
+          const isRecBt = /(bluetooth|a2dp|\bbt\b|loa|speaker|jbl|sony|bose|marshall|anker|buds|airpods|headset|earphone|tai nghe)/.test(
+            labelCombined
+          );
+          const recBtCompMs = isRecBt ? -120 : 0;
+          const recNetCompMs = -Math.min(40, (rec.rttMs || 0) * 0.5);
+          const calibratedOffset = Math.max(
+            -250,
+            Math.min(250, Math.round((hostOutDelayMs + recBtCompMs + recNetCompMs) / 5) * 5)
+          );
+          updateDevice(rec.id, { delayOffsetMs: calibratedOffset });
+        }
+
+        const msgParts = [`Đệm Wi-Fi ${nextJitterMs} ms`];
+        if (targetRecs.length > 0) {
+          msgParts.push(`đã cân chỉnh ${targetRecs.length} loa`);
+        } else {
+          msgParts.push(`Ping ${medianHostRtt} ms`);
+        }
+        setAutoCalibNote(`Đã tự bù trễ: ${msgParts.join(' · ')}`);
+      } finally {
+        setIsAutoCalibrating(false);
+      }
+    },
+    [sendControl, startContinuousMonitor, updateDevice, updateStreamSettings]
+  );
+
   useEffect(() => {
     if ('mediaSession' in navigator) {
       try {
@@ -1188,6 +1397,8 @@ export function useHostStreamer(roomId: string) {
     savedPlaylists,
     isScanning,
     isDecodingTrack,
+    isAutoCalibrating,
+    autoCalibNote,
     scanProgress,
     decodeError,
     isPlaying,
@@ -1200,6 +1411,8 @@ export function useHostStreamer(roomId: string) {
     setLocalMonitorEnabled,
     localMonitorVolume,
     setLocalMonitorVolume,
+    hostChannelMode,
+    setHostChannelMode,
     spectrumBands,
     metrics,
     startPlayback,
@@ -1219,5 +1432,6 @@ export function useHostStreamer(roomId: string) {
     updateDevice,
     sendTestTone,
     kickDevice,
+    autoCalibrateDelay,
   };
 }

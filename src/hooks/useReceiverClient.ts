@@ -36,6 +36,8 @@ export function useReceiverClient(
   const [outputDevices, setOutputDevices] = useState<AudioOutputOption[]>([]);
   const [selectedOutputId, setSelectedOutputId] = useState<string>('default');
   const [sinkSupported, setSinkSupported] = useState(false);
+  const [isAutoCalibrating, setIsAutoCalibrating] = useState(false);
+  const [autoCalibNote, setAutoCalibNote] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -43,6 +45,7 @@ export function useReceiverClient(
 
   const serverOffsetMsRef = useRef(0);
   const rttMsRef = useRef(0);
+  const pingSamplesRef = useRef<{ rtt: number; offset: number; ts: number }[]>([]);
   const nextScheduledTimeRef = useRef(0);
   const lastSeqRef = useRef<number | null>(null);
   const packetsReceivedRef = useRef(0);
@@ -275,7 +278,15 @@ export function useReceiverClient(
             rttMsRef.current = rtt;
             setRttMs(rtt);
             const estimatedServerNow = msg.serverTimeMs + rtt / 2;
-            serverOffsetMsRef.current = estimatedServerNow - now;
+            const offset = estimatedServerNow - now;
+            pingSamplesRef.current.push({ rtt, offset, ts: now });
+            if (pingSamplesRef.current.length > 16) {
+              pingSamplesRef.current.shift();
+            }
+            // Prefer lowest-RTT sample among recent 6 pings for tight clock discipline
+            const recent = pingSamplesRef.current.slice(-6);
+            const best = recent.reduce((acc, s) => (s.rtt < acc.rtt ? s : acc), recent[0]);
+            serverOffsetMsRef.current = best.offset;
           } else if (msg.type === 'device:config') {
             setDeviceConfig(msg.device);
           } else if (msg.type === 'room:settings') {
@@ -364,6 +375,67 @@ export function useReceiverClient(
     [sendControl]
   );
 
+  const autoCalibrateDelay = useCallback(async () => {
+    setIsAutoCalibrating(true);
+    setAutoCalibNote(null);
+    try {
+      if (!audioReadyRef.current) {
+        await enableAudio();
+      }
+
+      // 5-ping NTP burst to discipline server clock offset and measure Wi-Fi jitter
+      for (let i = 0; i < 5; i++) {
+        sendControl({ type: 'sync:ping', clientSendMs: Date.now() });
+        await new Promise((r) => setTimeout(r, 60));
+      }
+
+      const recent = pingSamplesRef.current.slice(-6);
+      const sortedRtt = recent.map((s) => s.rtt).sort((a, b) => a - b);
+      const medianRtt = sortedRtt.length > 0 ? sortedRtt[Math.floor(sortedRtt.length / 2)] : rttMsRef.current;
+      if (recent.length > 0) {
+        const best = recent.reduce((acc, s) => (s.rtt < acc.rtt ? s : acc), recent[0]);
+        serverOffsetMsRef.current = best.offset;
+      }
+
+      const ctx = audioCtxRef.current as (AudioContext & { outputLatency?: number }) | null;
+      const measuredOutMs = ctx
+        ? ((ctx.outputLatency || 0) + (ctx.baseLatency || 0)) * 1000
+        : 0;
+
+      const nativeBtName = window.__MTB_ANDROID__?.getBluetoothSpeakerName?.()?.trim() || '';
+      const combinedLabel = `${nativeBtName} ${outputLabelRef.current} ${deviceConfigRef.current?.speakerLabel || ''} ${initialSpeaker}`.toLowerCase();
+      const hasBtCue =
+        Boolean(nativeBtName) ||
+        /(bluetooth|a2dp|\bbt\b|loa|speaker|jbl|sony|bose|marshall|anker|buds|airpods|headset|earphone|tai nghe)/.test(
+          combinedLabel
+        );
+
+      let hardwareLatencyMs = 0;
+      if (measuredOutMs >= 25) {
+        hardwareLatencyMs = Math.min(240, measuredOutMs);
+      } else if (hasBtCue) {
+        hardwareLatencyMs = 120;
+      }
+
+      const netHalfMs = Math.min(40, medianRtt * 0.5);
+      const targetOffsetMs = Math.max(
+        -250,
+        Math.min(250, Math.round(-(hardwareLatencyMs + netHalfMs) / 5) * 5)
+      );
+
+      // Re-lock jitter buffer cleanly on next incoming PCM frame
+      nextScheduledTimeRef.current = 0;
+      updateSelf({ delayOffsetMs: targetOffsetMs });
+
+      const labelTag = measuredOutMs >= 25 ? `Độ trễ phần cứng ${Math.round(measuredOutMs)} ms` : hasBtCue ? 'Bluetooth A2DP' : 'Loa tiêu chuẩn';
+      setAutoCalibNote(
+        `Đã tự bù ${targetOffsetMs > 0 ? `+${targetOffsetMs}` : targetOffsetMs} ms (Ping ${medianRtt} ms · ${labelTag})`
+      );
+    } finally {
+      setIsAutoCalibrating(false);
+    }
+  }, [enableAudio, initialSpeaker, sendControl, updateSelf]);
+
   return {
     wsConnected,
     hostConnected,
@@ -378,8 +450,11 @@ export function useReceiverClient(
     outputDevices,
     selectedOutputId,
     sinkSupported,
+    isAutoCalibrating,
+    autoCalibNote,
     enableAudio,
     selectAudioOutput,
     updateSelf,
+    autoCalibrateDelay,
   };
 }

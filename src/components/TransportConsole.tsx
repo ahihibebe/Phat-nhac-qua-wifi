@@ -9,11 +9,25 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Sparkles,
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import type { DecodedTrack, FrameDurationMs, RoomSettings, SampleRateOption } from '../types/audio';
+import type {
+  ChannelRouting,
+  DecodedTrack,
+  FrameDurationMs,
+  RoomSettings,
+  SampleRateOption,
+} from '../types/audio';
 import { TortoiseProgressBar } from './TortoiseProgressBar';
+
+const HOST_CHANNEL_OPTIONS: { value: ChannelRouting; label: string }[] = [
+  { value: 'stereo', label: 'Stereo' },
+  { value: 'left', label: 'Trái (L)' },
+  { value: 'right', label: 'Phải (R)' },
+  { value: 'mono', label: 'Mono' },
+];
 
 interface TransportConsoleProps {
   activeTrack: DecodedTrack | null;
@@ -34,6 +48,11 @@ interface TransportConsoleProps {
   onToggleLocalMonitor: () => void;
   localMonitorVolume: number;
   onChangeLocalMonitorVolume: (val: number) => void;
+  hostChannelMode: ChannelRouting;
+  onChangeHostChannelMode: (mode: ChannelRouting) => void;
+  isAutoCalibrating?: boolean;
+  autoCalibNote?: string | null;
+  onAutoCalibrate?: () => void;
   onPlay: () => void;
   onPause: () => void;
   onStop: () => void;
@@ -64,6 +83,11 @@ export const TransportConsole: FC<TransportConsoleProps> = ({
   onToggleLocalMonitor,
   localMonitorVolume,
   onChangeLocalMonitorVolume,
+  hostChannelMode,
+  onChangeHostChannelMode,
+  isAutoCalibrating = false,
+  autoCalibNote = null,
+  onAutoCalibrate,
   onPlay,
   onPause,
   onStop,
@@ -303,8 +327,29 @@ export const TransportConsole: FC<TransportConsoleProps> = ({
         </div>
       </div>
 
-      {/* Wi-Fi Stream & Jitter Buffer Settings */}
-      <div className="mt-5 grid grid-cols-1 gap-4 border-t border-slate-200 pt-5 sm:grid-cols-3">
+      {/* Wi-Fi Stream, Host Channel Routing & Jitter Buffer Settings */}
+      <div className="mt-5 grid grid-cols-1 gap-4 border-t border-slate-200 pt-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <span className="block text-xs font-medium text-slate-600 mb-2">Kênh phát máy chủ</span>
+          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+            {HOST_CHANNEL_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => onChangeHostChannelMode(opt.value)}
+                aria-pressed={hostChannelMode === opt.value}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                  hostChannelMode === opt.value
+                    ? 'bg-white text-sky-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div>
           <span className="block text-xs font-medium text-slate-600 mb-2">Chất lượng truyền PCM</span>
           <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
@@ -346,11 +391,24 @@ export const TransportConsole: FC<TransportConsoleProps> = ({
         </div>
 
         <div>
-          <div className="flex items-center justify-between text-xs mb-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-2">
             <span className="font-medium text-slate-600">Bộ đệm chống giật Wi-Fi</span>
-            <span className="font-mono font-semibold text-sky-600 tabular-nums">
-              {settings.jitterBufferMs} ms
-            </span>
+            <div className="flex items-center gap-2">
+              {onAutoCalibrate && (
+                <button
+                  type="button"
+                  onClick={onAutoCalibrate}
+                  disabled={isAutoCalibrating}
+                  className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 hover:bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-700 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Sparkles className={`h-3 w-3 ${isAutoCalibrating ? 'animate-spin' : ''}`} />
+                  {isAutoCalibrating ? 'Đang đo...' : 'Auto bù trễ'}
+                </button>
+              )}
+              <span className="font-mono font-semibold text-sky-600 tabular-nums">
+                {settings.jitterBufferMs} ms
+              </span>
+            </div>
           </div>
           <input
             type="range"
@@ -366,6 +424,9 @@ export const TransportConsole: FC<TransportConsoleProps> = ({
             <span>40 ms (Nhanh)</span>
             <span>220 ms (Ổn định)</span>
           </div>
+          {autoCalibNote && (
+            <p className="mt-1 text-[11px] font-medium text-emerald-700">{autoCalibNote}</p>
+          )}
         </div>
       </div>
     </section>

@@ -98,6 +98,11 @@ function HostDashboard({
               onToggleLocalMonitor={() => host.setLocalMonitorEnabled((v) => !v)}
               localMonitorVolume={host.localMonitorVolume}
               onChangeLocalMonitorVolume={host.setLocalMonitorVolume}
+              hostChannelMode={host.hostChannelMode}
+              onChangeHostChannelMode={host.setHostChannelMode}
+              isAutoCalibrating={host.isAutoCalibrating}
+              autoCalibNote={host.autoCalibNote}
+              onAutoCalibrate={() => host.autoCalibrateDelay()}
               onPlay={() => host.startPlayback()}
               onPause={host.pausePlayback}
               onStop={host.stopAndRewind}
@@ -130,10 +135,12 @@ function HostDashboard({
           <DeviceMatrix
             receivers={host.receivers}
             roomId={roomId}
+            isAutoCalibrating={host.isAutoCalibrating}
             onUpdateDevice={host.updateDevice}
             onSendTestTone={host.sendTestTone}
             onKickDevice={host.kickDevice}
             onOpenPairing={() => setPairingOpen(true)}
+            onAutoCalibrate={host.autoCalibrateDelay}
           />
         )}
       </main>
