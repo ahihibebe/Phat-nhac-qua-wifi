@@ -1,0 +1,82 @@
+name: Build & Release Parallel APKs (Truyền & Nhận)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build APK (${{ matrix.flavor }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: Transmitter
+            task: assembleTransmitterRelease
+            raw_apk: android/app/build/outputs/apk/transmitter/release/app-transmitter-release.apk
+            release_name: MusicToBlutooth-Truyen.apk
+          - flavor: Receiver
+            task: assembleReceiverRelease
+            raw_apk: android/app/build/outputs/apk/receiver/release/app-receiver-release.apk
+            release_name: MusicToBlutooth-Nhan.apk
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build ${{ matrix.flavor }} Release APK
+        working-directory: android
+        run: gradle :app:${{ matrix.task }} --no-daemon --stacktrace
+
+      - name: Rename APK output
+        run: cp "${{ matrix.raw_apk }}" "${{ matrix.release_name }}"
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.release_name }}
+          path: ${{ matrix.release_name }}
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-apk
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Transmitter APK
+        uses: actions/download-artifact@v4
+        with:
+          name: MusicToBlutooth-Truyen.apk
+          path: release-assets
+
+      - name: Download Receiver APK
+        uses: actions/download-artifact@v4
+        with:
+          name: MusicToBlutooth-Nhan.apk
+          path: release-assets
+
+      - name: Create Release & Attach APKs
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name == 'main' && 'v1.0.0' || github.ref_name }}
+          name: MusicToBlutooth ${{ github.ref_name == 'main' && 'v1.0.0' || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release-assets/MusicToBlutooth-Truyen.apk
+            release-assets/MusicToBlutooth-Nhan.apk

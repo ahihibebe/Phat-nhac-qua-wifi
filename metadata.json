@@ -1,0 +1,6 @@
+{
+  "name": "MusicToBlutooth",
+  "description": "App điều khiển và truyền âm thanh PCM qua Wi-Fi đồng bộ tới nhiều điện thoại kết nối loa Bluetooth.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
