@@ -51,6 +51,8 @@ export function useReceiverClient(
   const packetsReceivedRef = useRef(0);
   const packetsDroppedRef = useRef(0);
   const bufferMsRef = useRef(0);
+  const signalDbRef = useRef(-60);
+  const lastPcmAtRef = useRef(0);
   const audioReadyRef = useRef(false);
   const deviceConfigRef = useRef<ReceiverDevice | null>(null);
   const outputLabelRef = useRef('Mặc định / Loa Bluetooth đang kết nối');
@@ -164,16 +166,23 @@ export function useReceiverClient(
         }, 3000);
 
         telemetryTimer = window.setInterval(() => {
+          if (Date.now() - lastPcmAtRef.current > 1200 && signalDbRef.current > -60) {
+            signalDbRef.current = -60;
+            bufferMsRef.current = 0;
+            setSignalDb(-60);
+            setBufferMs(0);
+          }
           sendControl({
             type: 'receiver:telemetry',
             rttMs: rttMsRef.current,
             bufferMs: Math.round(bufferMsRef.current),
             packetsReceived: packetsReceivedRef.current,
             packetsDropped: packetsDroppedRef.current,
+            signalDb: Number(signalDbRef.current.toFixed(1)),
             audioReady: audioReadyRef.current,
             outputDeviceLabel: outputLabelRef.current,
           });
-        }, 1200);
+        }, 600);
       };
 
       ws.onmessage = (event) => {
@@ -188,6 +197,9 @@ export function useReceiverClient(
             return;
           }
 
+          lastPcmAtRef.current = Date.now();
+          signalDbRef.current = parsed.rmsDb;
+
           if (!parsed.isTestTone && lastSeqRef.current !== null && parsed.seq > lastSeqRef.current + 1) {
             const gap = parsed.seq - lastSeqRef.current - 1;
             if (gap < 20) {
@@ -196,6 +208,12 @@ export function useReceiverClient(
           }
           if (!parsed.isTestTone) {
             lastSeqRef.current = parsed.seq;
+          }
+
+          if ((packetsReceivedRef.current & 3) === 0) {
+            setPacketsReceived(packetsReceivedRef.current);
+            setPacketsDropped(packetsDroppedRef.current);
+            setSignalDb(parsed.rmsDb);
           }
 
           const ctx = audioCtxRef.current;
@@ -256,9 +274,6 @@ export function useReceiverClient(
           bufferMsRef.current = Math.max(0, (nextScheduledTimeRef.current - ctx.currentTime) * 1000);
 
           if ((packetsReceivedRef.current & 3) === 0) {
-            setPacketsReceived(packetsReceivedRef.current);
-            setPacketsDropped(packetsDroppedRef.current);
-            setSignalDb(parsed.rmsDb);
             setBufferMs(Math.round(bufferMsRef.current));
           }
           return;
@@ -317,6 +332,7 @@ export function useReceiverClient(
             setRoomSettings(msg.settings);
           } else if (msg.type === 'host:disconnected') {
             setHostConnected(false);
+            signalDbRef.current = -60;
             setSignalDb(-60);
           }
         }

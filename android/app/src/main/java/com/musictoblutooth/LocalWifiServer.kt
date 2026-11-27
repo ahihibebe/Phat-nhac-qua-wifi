@@ -56,6 +56,7 @@ class LocalWifiServer(
         var bufferMs: Int = 0,
         var packetsReceived: Long = 0,
         var packetsDropped: Long = 0,
+        var signalDb: Double = -60.0,
         var audioReady: Boolean = false,
         var outputDeviceLabel: String = "Mặc định / Loa Bluetooth",
         val connectedAt: Long = System.currentTimeMillis(),
@@ -73,6 +74,7 @@ class LocalWifiServer(
             put("bufferMs", bufferMs)
             put("packetsReceived", packetsReceived)
             put("packetsDropped", packetsDropped)
+            put("signalDb", signalDb)
             put("audioReady", audioReady)
             put("outputDeviceLabel", outputDeviceLabel)
             put("connectedAt", connectedAt)
@@ -529,6 +531,9 @@ class LocalWifiServer(
                 dev.bufferMs = msg.optInt("bufferMs", dev.bufferMs)
                 dev.packetsReceived = msg.optLong("packetsReceived", dev.packetsReceived)
                 dev.packetsDropped = msg.optLong("packetsDropped", dev.packetsDropped)
+                if (msg.has("signalDb")) {
+                    dev.signalDb = msg.optDouble("signalDb", dev.signalDb)
+                }
                 dev.audioReady = msg.optBoolean("audioReady", dev.audioReady)
                 dev.outputDeviceLabel = msg.optString("outputDeviceLabel", dev.outputDeviceLabel)
                 dev.lastSeenAt = System.currentTimeMillis()

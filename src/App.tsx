@@ -91,6 +91,7 @@ function HostDashboard({
               settings={host.settings}
               wsConnected={host.wsConnected}
               receiverCount={host.receivers.length}
+              receivers={host.receivers}
               packetsSent={host.metrics.packetsSent}
               kbps={host.metrics.kbps}
               spectrumBands={host.spectrumBands}

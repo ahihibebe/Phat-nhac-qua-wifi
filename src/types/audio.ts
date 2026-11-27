@@ -20,6 +20,7 @@ export interface ReceiverDevice {
   bufferMs: number;
   packetsReceived: number;
   packetsDropped: number;
+  signalDb?: number;
   audioReady: boolean;
   outputDeviceLabel: string;
   connectedAt: number;
@@ -166,6 +167,7 @@ export type ClientMessage =
       bufferMs: number;
       packetsReceived: number;
       packetsDropped: number;
+      signalDb?: number;
       audioReady: boolean;
       outputDeviceLabel: string;
     }

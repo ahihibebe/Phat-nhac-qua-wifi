@@ -216,6 +216,28 @@ export const DeviceMatrix: FC<DeviceMatrixProps> = ({
                         Nhận {dev.packetsReceived.toLocaleString('vi-VN')} gói (mất {dev.packetsDropped})
                       </span>
                     </div>
+                    <div className="mt-2 max-w-xs space-y-1">
+                      <div className="flex justify-between text-[11px] text-slate-500">
+                        <span>Mức tín hiệu nhận qua Wi-Fi</span>
+                        <span className="font-mono font-semibold text-sky-700 tabular-nums">
+                          {(typeof dev.signalDb === 'number' ? dev.signalDb : -60).toFixed(1)} dBFS
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-slate-100 border border-slate-200 overflow-hidden">
+                        <div
+                          className="h-full bg-sky-600 transition-all duration-100"
+                          style={{
+                            width: `${Math.max(
+                              0,
+                              Math.min(
+                                100,
+                                (((typeof dev.signalDb === 'number' ? dev.signalDb : -60) + 60) / 60) * 100
+                              )
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
