@@ -29,6 +29,11 @@ declare global {
       getBluetoothSpeakerName?: () => string;
       setBackgroundPlayback?: (active: boolean, title: string, subtitle: string) => void;
       scanDeviceMusic?: () => string;
+      isSystemCaptureSupported?: () => boolean;
+      isSystemCaptureActive?: () => boolean;
+      updateSystemCaptureConfig?: (jitterMs: number, channelMode: string, roomId: string) => void;
+      startSystemAudioCapture?: (jitterMs: number, channelMode: string, roomId: string) => void;
+      stopSystemAudioCapture?: () => void;
     };
   }
 }

@@ -103,6 +103,14 @@ function HostDashboard({
               isAutoCalibrating={host.isAutoCalibrating}
               autoCalibNote={host.autoCalibNote}
               onAutoCalibrate={() => host.autoCalibrateDelay()}
+              isSystemCaptureArmed={host.isSystemCaptureArmed}
+              isExternalMediaStreaming={host.isExternalMediaStreaming}
+              externalMediaDetectedOnDevice={host.externalMediaDetectedOnDevice}
+              autoTransmitExternalMedia={host.autoTransmitExternalMedia}
+              captureError={host.captureError}
+              onToggleAutoTransmitExternalMedia={host.setAutoTransmitExternalMedia}
+              onStartDeviceMediaCapture={() => host.startDeviceMediaCapture(false)}
+              onStopDeviceMediaCapture={host.stopDeviceMediaCapture}
               onPlay={() => host.startPlayback()}
               onPause={host.pausePlayback}
               onStop={host.stopAndRewind}

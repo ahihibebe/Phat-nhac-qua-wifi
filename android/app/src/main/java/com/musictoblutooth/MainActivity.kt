@@ -6,8 +6,11 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.AudioPlaybackConfiguration
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -72,6 +75,50 @@ class MainActivity : AppCompatActivity() {
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
+
+    private var playbackCallback: AudioManager.AudioPlaybackCallback? = null
+
+    private val recordAudioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            launchMediaProjectionConsent()
+        } else {
+            pushCaptureEvent("mtb-native-capture-state", "{\"capturing\":false,\"error\":\"Chưa cấp quyền ghi âm nội bộ\"}")
+        }
+    }
+
+    private val mediaProjectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && result.data != null) {
+            val intent = Intent(this, MediaCaptureService::class.java).apply {
+                action = MediaCaptureService.ACTION_START
+                putExtra(MediaCaptureService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(MediaCaptureService.EXTRA_DATA, result.data)
+            }
+            ContextCompat.startForegroundService(this, intent)
+            pushCaptureEvent("mtb-native-capture-state", "{\"capturing\":true,\"error\":null}")
+        } else {
+            pushCaptureEvent("mtb-native-capture-state", "{\"capturing\":false,\"error\":\"Bạn đã hủy cấp quyền thu âm thanh hệ thống\"}")
+        }
+    }
+
+    private fun pushCaptureEvent(eventName: String, detailJson: String) {
+        if (!::webView.isInitialized) return
+        webView.post {
+            webView.evaluateJavascript(
+                "window.dispatchEvent(new CustomEvent('$eventName', { detail: $detailJson }));",
+                null
+            )
+        }
+    }
+
+    private fun launchMediaProjectionConsent() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager ?: return
+        mediaProjectionLauncher.launch(mpm.createScreenCaptureIntent())
+    }
 
     private fun resolveFriendlyDeviceName(): String {
         val customName = try {
@@ -167,6 +214,54 @@ class MainActivity : AppCompatActivity() {
         fun setBackgroundPlayback(active: Boolean, title: String, subtitle: String) {
             runOnUiThread {
                 updateBackgroundService(active, title, subtitle)
+            }
+        }
+
+        @JavascriptInterface
+        fun isSystemCaptureSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+
+        @JavascriptInterface
+        fun isSystemCaptureActive(): Boolean = MediaCaptureService.isRunning
+
+        @JavascriptInterface
+        fun updateSystemCaptureConfig(jitterMs: Int, channelMode: String, roomId: String) {
+            MediaCaptureService.jitterBufferMs = jitterMs
+            MediaCaptureService.channelMode = channelMode
+            MediaCaptureService.roomId = roomId
+        }
+
+        @JavascriptInterface
+        fun startSystemAudioCapture(jitterMs: Int, channelMode: String, roomId: String) {
+            MediaCaptureService.jitterBufferMs = jitterMs
+            MediaCaptureService.channelMode = channelMode
+            MediaCaptureService.roomId = roomId
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                pushCaptureEvent("mtb-native-capture-state", "{\"capturing\":false,\"error\":\"Tính năng thu âm thanh nội bộ yêu cầu Android 10 trở lên\"}")
+                return
+            }
+            if (MediaCaptureService.isRunning) {
+                pushCaptureEvent("mtb-native-capture-state", "{\"capturing\":true,\"error\":null}")
+                return
+            }
+            runOnUiThread {
+                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED
+                ) {
+                    recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    launchMediaProjectionConsent()
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun stopSystemAudioCapture() {
+            runOnUiThread {
+                val intent = Intent(this@MainActivity, MediaCaptureService::class.java).apply {
+                    action = MediaCaptureService.ACTION_STOP
+                }
+                startService(intent)
+                pushCaptureEvent("mtb-native-capture-state", "{\"capturing\":false,\"error\":null}")
             }
         }
 
@@ -336,6 +431,28 @@ class MainActivity : AppCompatActivity() {
             val ip = server.getLocalIpv4Address() ?: "127.0.0.1"
             lanOrigin = "http://$ip:8765"
             wsUrl = "ws://127.0.0.1:8765/ws"
+
+            MediaCaptureService.telemetryListener = { capturing, streaming, kbps, packetsSent, bandsJson ->
+                pushCaptureEvent(
+                    "mtb-native-capture-telemetry",
+                    "{\"capturing\":$capturing,\"streaming\":$streaming,\"kbps\":$kbps,\"packetsSent\":$packetsSent,\"bands\":$bandsJson}"
+                )
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                val cb = object : AudioManager.AudioPlaybackCallback() {
+                    override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>?) {
+                        val hasMedia = configs?.any { cfg ->
+                            val usage = cfg.audioAttributes.usage
+                            usage == AudioAttributes.USAGE_MEDIA || usage == AudioAttributes.USAGE_GAME
+                        } == true
+                        pushCaptureEvent("mtb-device-media-playback", "{\"active\":$hasMedia}")
+                    }
+                }
+                playbackCallback = cb
+                am?.registerAudioPlaybackCallback(cb, null)
+            }
         } else {
             startUdpHostDiscovery()
         }
@@ -486,6 +603,18 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         discoveryRunning = false
         try { discoverySocket?.close() } catch (_: Exception) {}
+        MediaCaptureService.telemetryListener = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && playbackCallback != null) {
+            try {
+                val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                am?.unregisterAudioPlaybackCallback(playbackCallback!!)
+            } catch (_: Exception) {
+            }
+        }
+        try {
+            stopService(Intent(this, MediaCaptureService::class.java))
+        } catch (_: Exception) {
+        }
         localWifiServer?.stop()
         updateBackgroundService(false, "", "")
         try {

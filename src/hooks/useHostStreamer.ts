@@ -66,6 +66,18 @@ export function useHostStreamer(roomId: string) {
   const [isDecodingTrack, setIsDecodingTrack] = useState(false);
   const [isAutoCalibrating, setIsAutoCalibrating] = useState(false);
   const [autoCalibNote, setAutoCalibNote] = useState<string | null>(null);
+  const [isSystemCaptureArmed, setIsSystemCaptureArmed] = useState(false);
+  const [isExternalMediaStreaming, setIsExternalMediaStreaming] = useState(false);
+  const [externalMediaDetectedOnDevice, setExternalMediaDetectedOnDevice] = useState(false);
+  const [autoTransmitExternalMedia, setAutoTransmitExternalMediaState] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('mtb_auto_transmit_media');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [captureError, setCaptureError] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number } | null>(null);
   const [decodeError, setDecodeError] = useState<string | null>(null);
 
@@ -130,6 +142,16 @@ export function useHostStreamer(roomId: string) {
   const totalBytesRef = useRef(0);
   const advanceTrackCallbackRef = useRef<() => void>(() => {});
   const decodeInFlightRef = useRef<Map<string, Promise<AudioBuffer | null>>>(new Map());
+
+  const isSystemCaptureArmedRef = useRef(false);
+  const autoTransmitExternalMediaRef = useRef(autoTransmitExternalMedia);
+  const declinedAutoPromptRef = useRef(false);
+  const captureStreamRef = useRef<MediaStream | null>(null);
+  const captureSourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const captureProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const captureSilenceGainRef = useRef<GainNode | null>(null);
+  const captureAudioCtxRef = useRef<AudioContext | null>(null);
+  const stopCaptureRef = useRef<() => void>(() => {});
 
   const updateBackgroundState = useCallback(
     (playing: boolean, track: DecodedTrack | null) => {
@@ -246,9 +268,27 @@ export function useHostStreamer(roomId: string) {
         // ignore storage error
       }
       applyMonitorChannelMatrix(mode, true);
+      window.__MTB_ANDROID__?.updateSystemCaptureConfig?.(
+        settingsRef.current.jitterBufferMs,
+        mode,
+        roomId
+      );
     },
-    [applyMonitorChannelMatrix]
+    [applyMonitorChannelMatrix, roomId]
   );
+
+  const setAutoTransmitExternalMedia = useCallback((enabled: boolean) => {
+    setAutoTransmitExternalMediaState(enabled);
+    autoTransmitExternalMediaRef.current = enabled;
+    if (enabled) {
+      declinedAutoPromptRef.current = false;
+    }
+    try {
+      localStorage.setItem('mtb_auto_transmit_media', String(enabled));
+    } catch {
+      // ignore storage error
+    }
+  }, []);
 
   const ensureAudioContext = useCallback((sampleRate: SampleRateOption) => {
     if (!audioCtxRef.current || audioCtxRef.current.sampleRate !== sampleRate) {
@@ -678,6 +718,9 @@ export function useHostStreamer(roomId: string) {
 
   const startPlayback = useCallback(
     async (fromPositionSec?: number) => {
+      if (isSystemCaptureArmedRef.current) {
+        stopCaptureRef.current();
+      }
       const track = activeTrackRef.current;
       if (!track) return;
 
@@ -1235,9 +1278,14 @@ export function useHostStreamer(roomId: string) {
       if (patch.sampleRate && isPlayingRef.current) {
         ensureAudioContext(patch.sampleRate);
       }
+      window.__MTB_ANDROID__?.updateSystemCaptureConfig?.(
+        next.jitterBufferMs,
+        hostChannelModeRef.current,
+        roomId
+      );
       sendControl({ type: 'host:settings', settings: patch });
     },
-    [ensureAudioContext, sendControl]
+    [ensureAudioContext, roomId, sendControl]
   );
 
   const updateDevice = useCallback(
@@ -1347,6 +1395,386 @@ export function useHostStreamer(roomId: string) {
     [sendControl, startContinuousMonitor, updateDevice, updateStreamSettings]
   );
 
+  const cleanupBrowserCaptureNodes = useCallback(() => {
+    if (captureProcessorRef.current) {
+      captureProcessorRef.current.onaudioprocess = null;
+      try {
+        captureProcessorRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      captureProcessorRef.current = null;
+    }
+    if (captureSourceNodeRef.current) {
+      try {
+        captureSourceNodeRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      captureSourceNodeRef.current = null;
+    }
+    if (captureSilenceGainRef.current) {
+      try {
+        captureSilenceGainRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      captureSilenceGainRef.current = null;
+    }
+    if (captureStreamRef.current) {
+      for (const track of captureStreamRef.current.getTracks()) {
+        try {
+          track.stop();
+        } catch {
+          // ignore
+        }
+      }
+      captureStreamRef.current = null;
+    }
+    if (captureAudioCtxRef.current) {
+      captureAudioCtxRef.current.close().catch(() => {});
+      captureAudioCtxRef.current = null;
+    }
+  }, []);
+
+  const stopDeviceMediaCapture = useCallback(() => {
+    if (window.__MTB_ANDROID__?.stopSystemAudioCapture) {
+      window.__MTB_ANDROID__.stopSystemAudioCapture();
+    }
+    cleanupBrowserCaptureNodes();
+    isSystemCaptureArmedRef.current = false;
+    setIsSystemCaptureArmed(false);
+    setIsExternalMediaStreaming(false);
+    setSpectrumBands(new Array(32).fill(0));
+    sendControl({
+      type: 'host:settings',
+      settings: { isPlaying: false },
+    });
+  }, [cleanupBrowserCaptureNodes, sendControl]);
+
+  useEffect(() => {
+    stopCaptureRef.current = stopDeviceMediaCapture;
+  }, [stopDeviceMediaCapture]);
+
+  const startDeviceMediaCapture = useCallback(
+    async (isAutoTriggered = false) => {
+      setCaptureError(null);
+      if (isPlayingRef.current) {
+        stopPlaybackLoop();
+      }
+
+      // 1. Native Android APK path (AudioPlaybackCapture via MediaProjection)
+      if (window.__MTB_ANDROID__?.startSystemAudioCapture) {
+        if (!window.__MTB_ANDROID__.isSystemCaptureSupported?.()) {
+          setCaptureError('Thu âm thanh nội bộ yêu cầu Android 10 trở lên.');
+          return;
+        }
+        if (!isAutoTriggered) {
+          declinedAutoPromptRef.current = false;
+        }
+        window.__MTB_ANDROID__.startSystemAudioCapture(
+          settingsRef.current.jitterBufferMs,
+          hostChannelModeRef.current,
+          roomId
+        );
+        return;
+      }
+
+      // 2. Web browser tab/system audio capture (getDisplayMedia + silence-gated PCM framer)
+      if (!navigator.mediaDevices?.getDisplayMedia) {
+        setCaptureError('Trình duyệt hiện tại không hỗ trợ thu âm thanh từ tab/thiết bị.');
+        return;
+      }
+
+      cleanupBrowserCaptureNodes();
+
+      try {
+        const mediaStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          } as MediaTrackConstraints,
+        });
+
+        // Stop video track immediately once granted if audio track is active
+        const audioTracks = mediaStream.getAudioTracks();
+        if (audioTracks.length === 0) {
+          for (const t of mediaStream.getTracks()) t.stop();
+          setCaptureError('Bạn chưa chọn "Chia sẻ âm thanh tab/hệ thống" trong hộp thoại trình duyệt.');
+          return;
+        }
+        for (const vt of mediaStream.getVideoTracks()) {
+          vt.stop();
+          mediaStream.removeTrack(vt);
+        }
+
+        const targetSampleRate = settingsRef.current.sampleRate;
+        const ctx = new AudioContext({ sampleRate: targetSampleRate });
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+        const src = ctx.createMediaStreamSource(mediaStream);
+        const proc = ctx.createScriptProcessor(1024, 2, 2);
+        const silentOut = ctx.createGain();
+        silentOut.gain.value = 0;
+
+        captureStreamRef.current = mediaStream;
+        captureAudioCtxRef.current = ctx;
+        captureSourceNodeRef.current = src;
+        captureProcessorRef.current = proc;
+        captureSilenceGainRef.current = silentOut;
+
+        isSystemCaptureArmedRef.current = true;
+        setIsSystemCaptureArmed(true);
+        setIsExternalMediaStreaming(false);
+
+        const actualSampleRate = ctx.sampleRate;
+        let accLeft = new Float32Array(0);
+        let accRight = new Float32Array(0);
+        let lastSoundAtMs = 0;
+        let lastBroadcastPlaying = false;
+        let lastUiPerf = 0;
+
+        proc.onaudioprocess = (ev) => {
+          if (!isSystemCaptureArmedRef.current) return;
+          const inL = ev.inputBuffer.getChannelData(0);
+          const inR = ev.inputBuffer.numberOfChannels > 1 ? ev.inputBuffer.getChannelData(1) : inL;
+
+          let peak = 0;
+          for (let i = 0; i < inL.length; i++) {
+            const a = Math.max(Math.abs(inL[i]), Math.abs(inR[i]));
+            if (a > peak) peak = a;
+          }
+
+          const nowMs = Date.now();
+          if (peak > 0.0005) {
+            lastSoundAtMs = nowMs;
+          }
+          const activeNow = nowMs - lastSoundAtMs <= 1200;
+
+          if (activeNow !== lastBroadcastPlaying) {
+            lastBroadcastPlaying = activeNow;
+            setIsExternalMediaStreaming(activeNow);
+            sendControl({
+              type: 'host:settings',
+              settings: {
+                isPlaying: activeNow,
+                trackTitle: activeNow ? 'Âm thanh Media trên thiết bị' : 'Đang chờ phát Media...',
+                trackDurationSec: 0,
+                trackPositionSec: 0,
+              },
+            });
+            if (!activeNow) {
+              setSpectrumBands(new Array(32).fill(0));
+            }
+          }
+
+          if (!activeNow) {
+            accLeft = new Float32Array(0);
+            accRight = new Float32Array(0);
+            return;
+          }
+
+          const combinedL = new Float32Array(accLeft.length + inL.length);
+          combinedL.set(accLeft, 0);
+          combinedL.set(inL, accLeft.length);
+
+          const combinedR = new Float32Array(accRight.length + inR.length);
+          combinedR.set(accRight, 0);
+          combinedR.set(inR, accRight.length);
+
+          const frameDur = settingsRef.current.frameDurationMs;
+          const frameSamples = Math.round((actualSampleRate * frameDur) / 1000);
+          let offset = 0;
+          let latestBands: number[] | null = null;
+
+          while (offset + frameSamples <= combinedL.length) {
+            const left = combinedL.slice(offset, offset + frameSamples);
+            const right = combinedR.slice(offset, offset + frameSamples);
+            offset += frameSamples;
+
+            const chMode = hostChannelModeRef.current;
+            if (chMode === 'left') {
+              right.set(left);
+            } else if (chMode === 'right') {
+              left.set(right);
+            } else if (chMode === 'mono') {
+              for (let i = 0; i < frameSamples; i++) {
+                const m = (left[i] + right[i]) * 0.5;
+                left[i] = m;
+                right[i] = m;
+              }
+            }
+
+            const playAtServerMs =
+              Date.now() + serverOffsetMsRef.current + settingsRef.current.jitterBufferMs;
+            const seq = seqRef.current++;
+            const { buffer, preview } = encodePcmPacket({
+              seq,
+              playAtServerMs,
+              sampleRate: actualSampleRate,
+              left,
+              right,
+              channels: 2,
+            });
+
+            const ws = wsRef.current;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(buffer);
+            }
+
+            totalPacketsRef.current += 1;
+            totalBytesRef.current += preview.byteLength;
+            bytesWindowRef.current.push({ ts: nowMs, bytes: preview.byteLength });
+            while (bytesWindowRef.current.length > 0 && nowMs - bytesWindowRef.current[0].ts > 1000) {
+              bytesWindowRef.current.shift();
+            }
+
+            const nowPerf = performance.now();
+            if (nowPerf - lastUiPerf >= 80) {
+              lastUiPerf = nowPerf;
+              const bands = new Array(32).fill(0);
+              const step = Math.max(1, Math.floor(frameSamples / 32));
+              for (let b = 0; b < 32; b++) {
+                let sum = 0;
+                for (let k = 0; k < step; k++) {
+                  const idx = b * step + k;
+                  if (idx < frameSamples) sum += Math.abs(left[idx]) + Math.abs(right[idx]);
+                }
+                bands[b] = Math.min(1, Math.pow((sum / (step * 2)) * 2.5, 0.72));
+              }
+              latestBands = bands;
+            }
+          }
+
+          accLeft = combinedL.slice(offset);
+          accRight = combinedR.slice(offset);
+
+          if (latestBands) {
+            setSpectrumBands(latestBands);
+            const windowBytes = bytesWindowRef.current.reduce((acc, item) => acc + item.bytes, 0);
+            setMetrics({
+              packetsSent: totalPacketsRef.current,
+              bytesSent: totalBytesRef.current,
+              kbps: Math.round((windowBytes * 8) / 1000),
+            });
+          }
+        };
+
+        src.connect(proc);
+        proc.connect(silentOut);
+        silentOut.connect(ctx.destination);
+
+        audioTracks[0].addEventListener('ended', () => {
+          stopCaptureRef.current();
+        });
+      } catch (err) {
+        cleanupBrowserCaptureNodes();
+        isSystemCaptureArmedRef.current = false;
+        setIsSystemCaptureArmed(false);
+        if (err instanceof Error && err.name === 'NotAllowedError') {
+          setCaptureError('Bạn đã hủy chia sẻ âm thanh trình duyệt.');
+        } else {
+          setCaptureError(
+            err instanceof Error ? `Không thể thu âm thanh: ${err.message}` : 'Không thể thu âm thanh thiết bị.'
+          );
+        }
+      }
+    },
+    [cleanupBrowserCaptureNodes, roomId, sendControl, stopPlaybackLoop]
+  );
+
+  // Listen to native Android system capture state, live telemetry, and external media playback events
+  useEffect(() => {
+    window.__MTB_ANDROID__?.updateSystemCaptureConfig?.(
+      settingsRef.current.jitterBufferMs,
+      hostChannelModeRef.current,
+      roomId
+    );
+    if (window.__MTB_ANDROID__?.isSystemCaptureActive?.()) {
+      isSystemCaptureArmedRef.current = true;
+      setIsSystemCaptureArmed(true);
+    }
+
+    const onState = (e: Event) => {
+      const detail = (e as CustomEvent<{ capturing?: boolean; error?: string | null }>).detail;
+      if (!detail) return;
+      const active = Boolean(detail.capturing);
+      isSystemCaptureArmedRef.current = active;
+      setIsSystemCaptureArmed(active);
+      if (!active) {
+        setIsExternalMediaStreaming(false);
+        setSpectrumBands(new Array(32).fill(0));
+      }
+      if (detail.error) {
+        setCaptureError(detail.error);
+        declinedAutoPromptRef.current = true;
+      } else {
+        setCaptureError(null);
+      }
+    };
+
+    const onTelemetry = (e: Event) => {
+      const d = (
+        e as CustomEvent<{
+          capturing?: boolean;
+          streaming?: boolean;
+          kbps?: number;
+          packetsSent?: number;
+          bands?: number[];
+        }>
+      ).detail;
+      if (!d) return;
+      const cap = Boolean(d.capturing);
+      const strm = Boolean(d.streaming);
+      isSystemCaptureArmedRef.current = cap;
+      setIsSystemCaptureArmed(cap);
+      setIsExternalMediaStreaming(strm);
+      if (Array.isArray(d.bands) && d.bands.length === 32) {
+        setSpectrumBands(d.bands);
+      } else if (!strm) {
+        setSpectrumBands(new Array(32).fill(0));
+      }
+      if (typeof d.kbps === 'number' || typeof d.packetsSent === 'number') {
+        setMetrics((prev) => ({
+          packetsSent: d.packetsSent ?? prev.packetsSent,
+          bytesSent: prev.bytesSent,
+          kbps: d.kbps ?? prev.kbps,
+        }));
+      }
+    };
+
+    const onDeviceMedia = (e: Event) => {
+      const active = Boolean((e as CustomEvent<{ active?: boolean }>).detail?.active);
+      // Ignore our own app's local WebAudio playback
+      if (isPlayingRef.current) {
+        setExternalMediaDetectedOnDevice(false);
+        return;
+      }
+      setExternalMediaDetectedOnDevice(active);
+      if (
+        active &&
+        autoTransmitExternalMediaRef.current &&
+        !isSystemCaptureArmedRef.current &&
+        !declinedAutoPromptRef.current &&
+        window.__MTB_ANDROID__?.startSystemAudioCapture
+      ) {
+        startDeviceMediaCapture(true);
+      }
+    };
+
+    window.addEventListener('mtb-native-capture-state', onState);
+    window.addEventListener('mtb-native-capture-telemetry', onTelemetry);
+    window.addEventListener('mtb-device-media-playback', onDeviceMedia);
+    return () => {
+      window.removeEventListener('mtb-native-capture-state', onState);
+      window.removeEventListener('mtb-native-capture-telemetry', onTelemetry);
+      window.removeEventListener('mtb-device-media-playback', onDeviceMedia);
+    };
+  }, [roomId, startDeviceMediaCapture]);
+
   useEffect(() => {
     if ('mediaSession' in navigator) {
       try {
@@ -1372,6 +1800,7 @@ export function useHostStreamer(roomId: string) {
 
   useEffect(() => {
     return () => {
+      cleanupBrowserCaptureNodes();
       stopBgTicker();
       if (tickerWorkerRef.current) {
         tickerWorkerRef.current.terminate();
@@ -1384,7 +1813,7 @@ export function useHostStreamer(roomId: string) {
       stopMonitorSource();
       audioCtxRef.current?.close().catch(() => {});
     };
-  }, [stopBgTicker, stopMonitorSource]);
+  }, [cleanupBrowserCaptureNodes, stopBgTicker, stopMonitorSource]);
 
   const activeTrack = tracks.find((t) => t.id === activeTrackId) || null;
 
@@ -1399,6 +1828,12 @@ export function useHostStreamer(roomId: string) {
     isDecodingTrack,
     isAutoCalibrating,
     autoCalibNote,
+    isSystemCaptureArmed,
+    isExternalMediaStreaming,
+    externalMediaDetectedOnDevice,
+    autoTransmitExternalMedia,
+    setAutoTransmitExternalMedia,
+    captureError,
     scanProgress,
     decodeError,
     isPlaying,
@@ -1433,5 +1868,7 @@ export function useHostStreamer(roomId: string) {
     sendTestTone,
     kickDevice,
     autoCalibrateDelay,
+    startDeviceMediaCapture,
+    stopDeviceMediaCapture,
   };
 }

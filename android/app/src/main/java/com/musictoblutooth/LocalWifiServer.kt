@@ -31,6 +31,11 @@ class LocalWifiServer(
     val port: Int = 8765,
     private val discoveryPort: Int = 49153
 ) {
+    companion object {
+        @Volatile
+        var activeInstance: LocalWifiServer? = null
+    }
+
     private val executor = Executors.newCachedThreadPool()
     private var serverSocket: ServerSocket? = null
     private var beaconSocket: DatagramSocket? = null
@@ -128,6 +133,7 @@ class LocalWifiServer(
     fun start() {
         if (running) return
         running = true
+        activeInstance = this
 
         executor.execute {
             try {
@@ -164,8 +170,40 @@ class LocalWifiServer(
         }
     }
 
+    fun broadcastNativeHostPcm(packet: ByteArray, roomId: String = activeRoomId) {
+        if (!running) return
+        for (target in clients.values) {
+            if (target.role == "receiver" && target.roomId == roomId) {
+                val rec = receivers[target.id]
+                if (rec != null && !rec.muted) {
+                    target.sendBinary(packet)
+                }
+            }
+        }
+    }
+
+    fun updateHostMediaStatus(roomId: String, isPlaying: Boolean, title: String) {
+        if (!running) return
+        val cur = roomSettings[roomId] ?: JSONObject()
+        cur.put("isPlaying", isPlaying)
+        cur.put("trackTitle", title)
+        roomSettings[roomId] = cur
+        val outMsg = JSONObject().apply {
+            put("type", "room:settings")
+            put("settings", cur)
+        }.toString()
+        for (c in clients.values) {
+            if (c.roomId == roomId && c.role == "receiver") {
+                c.sendText(outMsg)
+            }
+        }
+    }
+
     fun stop() {
         running = false
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         try { serverSocket?.close() } catch (_: Exception) {}
         try { beaconSocket?.close() } catch (_: Exception) {}
         for (c in clients.values) {
